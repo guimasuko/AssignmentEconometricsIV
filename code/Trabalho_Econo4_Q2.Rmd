@@ -23,6 +23,7 @@ library(gridExtra)
 
 ```{r}
 library(BVAR)
+library(lubridate)
 ```
 
 
@@ -62,9 +63,46 @@ data = mutate(data, CPIAUCSL = 100*(diff(data0$CPIAUCSL, differences = 1)/data0$
 
 \textcolor{blue}{Detalhe: estou usando a definição de inflação dada no enunciado $\pi_t = \frac{\Delta P_t}{P_t}$, que difere da definição usual $\pi_t = \frac{\Delta P_t}{P_{t-1}}$}
 
+```{r}
+# plot inflation
+inflation = data$CPIAUCSL
+
+data %>% 
+  select(date, CPIAUCSL) %>%
+  mutate(date = as.Date(date, format = '%m/%d/%Y')) %>%
+  #filter(date>as.Date('2000-01-01')) %>%
+  ggplot(aes(x = date, y = CPIAUCSL))+
+  geom_line()
+```
+
+
 ## Item A
 
 ### AR
+
+```{r}
+# Partial autocorrelation
+pacf(inflation, lag.max = 24)
+```
+
+
+```{r}
+p.max = 24
+bic.table = c()
+
+for(p in 0:p.max){
+  AR = arima(inflation, order = c(p,0,0))
+  bic.line = tibble("p"=p, "BIC" = BIC(AR))
+  bic.table = rbind(bic.table, bic.line)
+}
+
+plot(bic.table$p, bic.table$BIC)
+```
+```{r}
+p.opt = bic.table$p[which.min(bic.table$BIC)]
+```
+
+The p chosen with the BIC information criterion was `r p.opt`
 
 ### AR + PC
 
