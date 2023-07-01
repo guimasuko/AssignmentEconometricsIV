@@ -29,6 +29,17 @@ def r_squared(y_true: list, y_hat: list) -> float:
     return(r_squared_)
 
 
+def adj_r_squared(y_true: list, y_hat: list, model) -> float:
+    r2 = r_squared(y_true, y_hat)
+    N = len(y_true)
+    intercept = 0
+    if (model.intercept_ != 0):
+        intercept = 1
+    p = len(model.coef_)
+    adjr2 = 1 - ( ( (1-r2)*(N-intercept) ) / (N - p - intercept) )
+    return(adjr2)
+
+
 def rmse(y_true: list, y_hat: list) -> float:
     residuals = y_true - y_hat
     mse = np.mean(residuals**2)
