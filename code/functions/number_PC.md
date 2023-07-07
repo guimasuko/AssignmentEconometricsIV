@@ -14,5 +14,5 @@ Choose the number of components such that a large portion (say 90\%) of the vari
 Onatski (2010) suggests looking for the biggest drop computing
 
 $$
-r:=\arg \max _{1 \leq j<n} \frac{\lambda_j}{\lambda_{j+1}} 
+r:=\underset{1 \leq j < n}{\arg \max} \frac{\lambda_j}{\lambda_{j+1}} 
 $$
