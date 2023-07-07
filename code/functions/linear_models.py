@@ -26,7 +26,7 @@ def PCA_function(df: pd.DataFrame) -> tuple:
     
     # create the name of PCs: "PC k"
     name_cols = []
-    for i in range(len(Z)):
+    for i in range(Z.shape[1]):
         name_col = f'PC {i+1}'
         name_cols.append(name_col)
 
@@ -58,7 +58,7 @@ def PCA_function(df: pd.DataFrame) -> tuple:
 
 
 
-def OLS_regression(y: pd.DataFrame, X: pd.DataFrame, y_column: str = "PC 1"):
+def OLS_regression(y: pd.DataFrame, X: pd.DataFrame, y_column: str = "PC 1", is_pc: bool = False):
     """
     Function to run an OLS regression
 
@@ -74,17 +74,17 @@ def OLS_regression(y: pd.DataFrame, X: pd.DataFrame, y_column: str = "PC 1"):
     # response variable
     Y = y[y_column]
     # covariates with constant
-    X = sm.add_constant(X)
+    X_ = sm.add_constant(X)
 
     # model fit
-    model = sm.OLS(Y, X)
+    model = sm.OLS(Y, X_)
     results = model.fit()
 
     # boxplot with 95% CI
     # coefficients with constant
     coef = list(results.params)
     y = coef[1:]
-    x = [1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31]
+    loc_x = list(range(1, len(X.columns)*2, 2))
 
     # upper bound for 95% CI 
     upper_bound = results.conf_int(alpha=0.05)[1]
@@ -94,13 +94,20 @@ def OLS_regression(y: pd.DataFrame, X: pd.DataFrame, y_column: str = "PC 1"):
     errors = list(upper_bound - coef)[1:]
 
     plt.figure()
-    plt.errorbar(x, y, yerr=errors, fmt = 'o', color = 'k')
-    plt.xticks(( 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31), 
-            ( 'MKT', 'HML', 'SMB', 'MOM1', 'MOM36', 'ACC', 'BETA', 'CFP', 'CHCSHO', 'DY', 'EP', 'IDIOVOL', 'CMA', 'UMD', 'RMW', 'RETVOL'))
+    plt.errorbar(loc_x, y, yerr=errors, fmt = 'o', color = 'k')
+
+    xticks = list(X.columns)
+    plt.xticks(loc_x, 
+               xticks)
     plt.xticks(rotation=45)
 
-    plt.xlabel('Anomaly Factors')
+    if(is_pc == False):
+        cov_name = "Anomaly Factors"        
+    elif(is_pc == True):
+        cov_name = "Anomaly-Based Principal Components"
+
+    plt.xlabel(f'{cov_name}')
     plt.ylabel('Coefficients with 95% CI')
-    plt.title(f'{y_column} vs Anomaly Factors');
+    plt.title(f'{y_column} vs {cov_name}');
 
     return(results)
