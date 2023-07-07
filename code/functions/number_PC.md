@@ -13,6 +13,6 @@ Choose the number of components such that a large portion (say 90\%) of the vari
 `biggest_drop()` 
 Onatski (2010) suggests looking for the biggest drop computing
 
-```math
+$$
 r:=\arg \max _{1 \leq j<n} \frac{\lambda_j}{\lambda_{j+1}} 
-```
+$$
