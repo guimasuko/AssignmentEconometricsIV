@@ -181,7 +181,7 @@ for(i in 490:length(data$date)-1){
 for(i in 490:length(data$date)-1){
   y <- data_y[1:i]
   x <- data_x[1:i,]
-  lasso <- cv.glmnet(x,y,alpha=1)
+  lasso <- cv.glmnet(x,y,alpha=1, normalize = F)
   pred = predict(lasso, newx = data_x[i+1,], s="lambda.min")
   MSE_LASSO = (data_y[i+1] - pred)^2
   MSQ$lasso[i-491] <- MSE_LASSO
