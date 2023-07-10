@@ -40,6 +40,15 @@ def PCA_function(df: pd.DataFrame) -> tuple:
 
     # eigenvectors
     gammas = pca.components_
+
+    # create the name of gammas: "gamma k"
+    name_cols = []
+    for i in range(gammas.shape[0]):
+        name_col = f'gamma {i+1}'
+        name_cols.append(name_col)
+
+    # convert gammas into a dataframe
+    gammas = pd.DataFrame(gammas.T, index=df.columns, columns=name_cols)
     # eigenvalues or explained variance
     lambdas = pca.explained_variance_
     # explained variance ratio
@@ -97,9 +106,7 @@ def OLS_regression(y: pd.DataFrame, X: pd.DataFrame, y_column: str = "PC 1", is_
     plt.errorbar(loc_x, y, yerr=errors, fmt = 'o', color = 'k')
 
     xticks = list(X.columns)
-    plt.xticks(loc_x, 
-               xticks)
-    plt.xticks(rotation=45)
+    plt.xticks(loc_x, xticks, rotation=45)
 
     if(is_pc == False):
         cov_name = "Anomaly Factors"        
