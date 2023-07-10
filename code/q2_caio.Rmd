@@ -120,79 +120,74 @@ MSQ <- data.frame(date = seq(as.Date("2000-01-01"), as.Date("2021-11-01"), by = 
 
 # First window stops in Dec 1999 (row 490 of data). Last window stops in October 2011   
 
-for(i in 490:length(data$date)-1) {
-  y <- data$CPIAUCSL[1:i]
+for(i in 1:263) {
+  y <- data$CPIAUCSL[i:i+489]
   pred = predict(arima(y, order = c(p.opt,0,0)), n.ahead=1)
   y_hat = pred$pred
-  MSE_AR = (data$CPIAUCSL[i+1] - y_hat)^2
-  MSQ$ar[i-491] <- MSE_AR
+  MSE_AR = (data$CPIAUCSL[i+490] - y_hat)^2
+  MSQ$ar[i] <- MSE_AR
 }
 
 ```
 
+
+ y <- data$CPIAUCSL[263:263+489]
+  pred = predict(arima(y, order = c(p.opt,0,0)), n.ahead=1)
+  y_hat = pred$pred
+  MSE_AR = (data$CPIAUCSL[i+490] - y_hat)^2
+  MSQ$ar[i] <- MSE_AR
+
+
+
+
+
 ### AR + PCR
 
-We start by normalizing all variables. CPI is extracted as the dependent variable
 
 ```{r}
 
-data_x <- data %>% select(-c(CPIAUCSL, date))
-data_x <- scale(data_x, center=TRUE, scale=TRUE) # center TRUE subtracts mean and scale TRUE divides by s.d.
-data_y <- scale(inflation, center=TRUE, scale=TRUE)
-
-
+data_x <- as.matrix(data %>% select(-c(CPIAUCSL, date)))
+data_y <- as.matrix(inflation)
+#data_x <- scale(data_x, center=TRUE, scale=TRUE) # center TRUE subtracts mean and scale TRUE divides by s.d.
+#data_y <- scale(inflation, center=TRUE, scale=TRUE)
 
 ```
 
 ### Ridge
 
-```{r}
-ridge_fit <- ic.glmnet(data_x, data_y, crit="bic", alpha=0)
-ridge_lambda_bic <- ridge_fit$lambda
+We will use cv.glmet from HDeconometrics to pick lambda according to the Bayesian Information Criterion. Credits go to Gabriel Vasconcelos. 
 
-for(i in 490:length(data$date)-1){
-  y <- data_y[1:i]
-  x <- data_x[1:i,]
-  ridge <- glmnet(x,y,alpha=0)
-  pred = predict(ridge, newx = data_x[i+1,], s=ridge_lambda_bic)
-  MSE_RIDGE = (data_y[i+1] - pred)^2
-  MSQ$ridge[i-491] <- MSE_RIDGE
+
+```{r}
+
+for(i in 1:263){
+  y <- data_y[i:i+489]
+  x <- data_x[i:i+489,]
+  icridge <- ic.glmnet(data_x, data_y, crit="bic", alpha=0)
+  ridge <- glmnet(data_x, data_y, alpha=0)
+  pred = predict(ridge, newx = data_x[i+490,], s=icridge$lambda)
+  MSE_RIDGE = (data_y[i+490] - pred)^2
+  MSQ$ridge[i] <- MSE_RIDGE
 }
 
 ```
 ### LASSO
 
-We will use cv.glmet from HDeconometrics to pick lambda according to the bic. Credits go to 
 
 ```{r}
 
-lasso_fit <- ic.glmnet(data_x, data_y, crit="bic", alpha=1)
-lambda_bic <- lasso_fit$lambda
-
-for(i in 490:length(data$date)-1){
-  y <- data_y[1:i]
-  x <- data_x[1:i,]
-  lasso <- glmnet(x,y,alpha=1)
-  pred = predict(lasso, newx = data_x[i+1,], s=lambda_bic)
-  MSE_LASSO = (data_y[i+1] - pred)^2
-  MSQ$lasso[i-491] <- MSE_LASSO
+for(i in 1:263){
+  y <- data_y[i:i+489]
+  x <- data_x[i:i+489,]
+  iclasso <- ic.glmnet(data_x, data_y, crit="bic", alpha=1)
+  lasso <- glmnet(data_x, data_y, alpha=1)
+  pred = predict(lasso, newx = data_x[i+490,], s=iclasso$lambda)
+  MSE_LASSO = (data_y[i+490] - pred)^2
+  MSQ$lasso[i] <- MSE_LASSO
 }
-
-for(i in 490:length(data$date)-1){
-  y <- data_y[1:i]
-  x <- data_x[1:i,]
-  lasso <- cv.glmnet(x,y,alpha=1, normalize = F)
-  pred = predict(lasso, newx = data_x[i+1,], s=lasso$lambda.1se)
-  MSE_LASSO = (data_y[i+1] - pred)^2
-  MSQ$lasso[i-491] <- MSE_LASSO
-}
-
-
-
-
-
 
 ```
+
 
 
 MSQ <- MSQ %>% mutate(cum_ar = cumsum(ar),
@@ -200,10 +195,13 @@ MSQ <- MSQ %>% mutate(cum_ar = cumsum(ar),
                       cum_lasso = cumsum(lasso)
                       )
 
+
 MSQ %>% ggplot(aes(x = date)) +
-  geom_line(aes(y = cum_ar, color = "Cumulative AR"), size = 1) +
-  geom_line(aes(y = cum_ridge, color = "Cumulative Ridge"), size = 1) +
-  geom_line(aes(y = cum_lasso, color = "Cumulative Lasso"), size = 1) +
-  labs(x = "Date", y = "Cumulative Sum", title = "Cumulative Sums Over Time") +
-  scale_color_manual(values = c("Cumulative AR" = "blue", "Cumulative Ridge" = "red", "Cumulative Lasso" = "green")) +
+  geom_line(aes(y = cum_ar, color = "AR"), size = 1) +
+  geom_line(aes(y = cum_ridge, color = "Ridge"), size = 1) +
+  geom_line(aes(y = cum_lasso, color = "Lasso"), size = 1) +
+  labs(x = "Date", y = "MSE", title = "Cumulative MSE - Different Models") +
+  scale_color_manual(values = c("AR" = "blue", "Ridge" = "red", "Lasso" = "green")) +
   theme_minimal()
+
+
