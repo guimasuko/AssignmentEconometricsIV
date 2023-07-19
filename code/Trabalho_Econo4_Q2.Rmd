@@ -22,8 +22,9 @@ library(gridExtra)
 ```
 
 ```{r}
-library(BVAR)
 library(lubridate)
+library(tictoc)
+library(zoo)
 ```
 
 
@@ -54,18 +55,25 @@ Transformation codes
 
 ```{r}
 # data transformations based on the FRED transformation codes
-data = data0 %>% select(-sasdate) %>% fred_transform(type = 'fred_md') %>%
-  bind_cols(tibble(date = data0$sasdate[3:length(data0$sasdate)])) 
+data = data0 %>% select(-sasdate) %>% 
+  rename(SP500="S&P 500", SPINDUST="S&P: indust") %>%
+  BVAR::fred_transform(type = 'fred_md') %>%
+  bind_cols(tibble(date = data0$sasdate[3:length(data0$sasdate)])) %>%
+  mutate(date = as.Date(date, format = '%m/%d/%Y'))
 
 # for the CPI, we transform into a inflation series
 data = mutate(data, CPIAUCSL = 100*(diff(data0$CPIAUCSL, differences = 1)/data0$CPIAUCSL[-1])[-1])
 ```
 
+```{r}
+inflation = data$CPIAUCSL %>% ts(start = c(year(data$date[1]),month(data$date[1])), frequency = 12)
+```
+
+
 \textcolor{blue}{Detalhe: estou usando a definição de inflação dada no enunciado $\pi_t = \frac{\Delta P_t}{P_t}$, que difere da definição usual $\pi_t = \frac{\Delta P_t}{P_{t-1}}$}
 
 ```{r}
 # plot inflation
-inflation = data$CPIAUCSL
 
 data %>% 
   select(date, CPIAUCSL) %>%
@@ -85,26 +93,209 @@ data %>%
 pacf(inflation, lag.max = 24)
 ```
 
+**Prediction**
 
-```{r}
-p.max = 24
+```{r, eval=FALSE}
+# isso aqui ta lerdo demais - refazer calculando o bic na mao mesmo
+tic()
+rolling_window <- 492
+p.max=4
+
+forecast = list()
+
+for(a in 0:(length(inflation)-rolling_window-1)){
+
+train = window(inflation, 
+               start = start(inflation)+c(0,a), 
+               end = start(inflation)+c(0,a+rolling_window-1) )
+test = window(inflation, 
+              start =  start(inflation)+c(0,a+rolling_window), 
+              end =  start(inflation)+c(0,a+rolling_window))
+
 bic.table = c()
 
 for(p in 0:p.max){
-  AR = arima(inflation, order = c(p,0,0))
+  AR = arima(train, order = c(p,0,0))
   bic.line = tibble("p"=p, "BIC" = BIC(AR))
   bic.table = rbind(bic.table, bic.line)
 }
 
-plot(bic.table$p, bic.table$BIC)
-```
-```{r}
 p.opt = bic.table$p[which.min(bic.table$BIC)]
+
+AR = arima(train, order = c(p.opt,0,0))
+
+forecast[a+1] = predict(AR, n.ahead = 1)
+}
+
+forecast = forecast %>% unlist() %>% ts(start = start(forecast[[1]]), frequency = frequency(forecast[[1]]))
+toc()
 ```
 
-The p chosen with the BIC information criterion was `r p.opt`
+```{r}
+# function for calculating the BIC for AR models
+BIC.ar <- function(model) {
+  
+  ssr <- sum(model$resid^2, na.rm = T)
+  t <- length(model$resid)
+  npar <- length(model$coef)
+  
+  return(c("p" = model$order,
+            "BIC" = log(ssr/t) + npar * log(t)/t))
+}
+```
+
+
+```{r}
+# Rolling window forecasting
+rolling_window <- 492
+p.max=24
+
+forecast = list()
+
+for(a in 0:(length(inflation)-rolling_window-1)){
+
+train = window(inflation, 
+               start = start(inflation)+c(0,a), 
+               end = start(inflation)+c(0,a+rolling_window-1) )
+test = window(inflation, 
+              start =  start(inflation)+c(0,a+rolling_window), 
+              end =  start(inflation)+c(0,a+rolling_window))
+
+bic.table = c()
+
+for(p in 0:p.max){ # calculating the BIC for different orders of the AR(p)
+  AR = ar(train, order.max = p, method = 'ols', aic = F)
+  bic.line = BIC.ar(AR) 
+  bic.table = rbind(bic.table, bic.line)
+}
+bic.table = data.frame(bic.table)
+
+p.opt = bic.table$p[which.min(bic.table$BIC)] # pick the optimal p
+
+AR =  ar(train, order.max = p.opt, method = 'ols', aic = F) # run the AR model with the optimal p
+
+forecast[[a+1]] = predict(AR, n.ahead = 1)$pred # one-step-ahead forecast
+}
+
+forecast = forecast %>% unlist() %>% ts(start = start(forecast[[1]]), frequency =  frequency(forecast[[1]]) )
+```
+
+
+
+```{r}
+ts.plot(inflation, forecast, col = c("red", "blue") )
+```
+
+```{r}
+# Forecasting error
+error = inflation - forecast
+cum_squared_error = error^2 %>% cumsum() %>%
+  bind_cols(date = as.Date.yearmon(time(error))) %>%
+  setNames( c('AR.cse', 'date' ) )
+
+cum_squared_error %>%
+  ggplot(aes(x = date, y = AR.cse))+
+  geom_line()
+
+```
+
 
 ### AR + PC
+
+1. PCA
+
+```{r}
+pca = data %>% 
+  select(-CPIAUCSL, -date) %>% 
+  prcomp(scale=TRUE)  
+#summary(pca)
+```
+
+```{r, eval=F}
+## get the name of the top 10 measurements that contribute
+## most to pc1.
+loading_scores <- pca$rotation[,1]
+gene_scores <- abs(loading_scores) ## get the magnitudes
+gene_score_ranked <- sort(gene_scores, decreasing=TRUE)
+top_10_genes <- names(gene_score_ranked[1:10])
+ 
+top_10_genes ## show the names of the top 10 genes
+ 
+pca$rotation[top_10_genes,1] ## show the scores (and +/- sign)
+```
+
+2. Select PCs
+
+```{r}
+pca.var <- pca$sdev^2
+pca.var.prop = data.frame( pc = 1:length(pca.var), var.prop = pca.var/sum(pca.var)) %>%
+  mutate(var.prop.cum = cumsum(var.prop))
+
+pca.var.prop %>%
+  ggplot(aes(x = pc, y = var.prop.cum)) +
+  geom_bar(stat = 'identity') +
+  labs(x = "Principal Component", y = "Variance Explained") +
+  ggtitle("Variance Explained by Principal Components")
+
+```
+
+```{r}
+# Choosing the number of PCs
+
+# Rule of thumb (3%)
+
+pca.var.prop %>%
+  filter(var.prop>=0.03) %>%
+  nrow()
+```
+
+```{r}
+# Informal way (90%)
+
+pca.var.prop %>%
+  filter(var.prop.cum<=0.9) %>%
+  nrow()
+```
+
+```{r}
+# Biggest drop 
+
+(lag(pca.var.prop$var.prop)/pca.var.prop$var.prop) %>%
+  which.max() -1 
+
+# ta certo isso? kkkkkkk
+
+```
+
+\textcolor{blue}{colocar alguma explicacao de qual criterio vamos adotar - usar rule of thumb q foi oq o masuko usou na 1}
+
+```{r}
+# usando rule of thumb
+n_pc = pca.var.prop %>%
+  filter(var.prop>=0.03) %>%
+  nrow()
+```
+
+3. Regression
+
+\textcolor{red}{como escolher a ordem do AR? nao devia fazer isso conjuntamente com os fatores?}
+
+```{r}
+Factors = pca$x[,1:n_pc]
+
+# sepa usar um pacote de ARDL pra essa parte
+
+
+```
+
+
+4. Prediction
+
+```{r}
+#predict(model, newdata = )
+```
+
+
 
 ### Ridge Regression
 
