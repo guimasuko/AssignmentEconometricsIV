@@ -19,12 +19,15 @@ library(ggplot2)
 library(stargazer)
 library(kableExtra)
 library(gridExtra)
+library(ggsci) # color pallette
+library(tictoc)
 ```
 
 ```{r}
-library(lubridate)
-library(tictoc)
+library(lubridate) # for handling dates
 library(zoo)
+library(dynlm) # for time series regressions
+library(forecast) # for the improved Pacf function
 ```
 
 
@@ -35,15 +38,20 @@ theme_update(title = element_text(family = 'serif'),
              legend.text = element_text(family = 'serif')) 
 ```
 
-# Questão 2
+# Question 2
+
+First of all, we must do some data wrangling.
 
 ```{r}
+# Import the data
 raw_data = read_csv('data/2021-12.csv')
 data0 = raw_data[-1,] %>% select_if(~ !any(is.na(.)))
 transformation = raw_data[1,]
 ```
 
-Transformation codes
+The suggested transformations (in order to make the series stationary) are indicated according to the following numeration.
+
+Transformation codes (from FRED):
 
 1. no transformation
 2. $\Delta x_t$
@@ -53,26 +61,28 @@ Transformation codes
 6. $\Delta^2 \log(x_t)$
 7. $\Delta (x_t/x_{t-1} -1)$
 
+For the CPI, we apply a specific transformation to turn it into an inflation series. \textcolor{blue}{Detalhe: estou usando a definição de inflação dada no enunciado $\pi_t = \frac{\Delta P_t}{P_t}$, que difere da definição usual $\pi_t = \frac{\Delta P_t}{P_{t-1}}$}
+
 ```{r}
-# data transformations based on the FRED transformation codes
+# Data transformations based on the FRED transformation codes
 data = data0 %>% select(-sasdate) %>% 
   rename(SP500="S&P 500", SPINDUST="S&P: indust") %>%
   BVAR::fred_transform(type = 'fred_md') %>%
   bind_cols(tibble(date = data0$sasdate[3:length(data0$sasdate)])) %>%
   mutate(date = as.Date(date, format = '%m/%d/%Y'))
 
-# for the CPI, we transform into a inflation series
+# For the CPI, we transform into an inflation series
 data = mutate(data, CPIAUCSL = 100*(diff(data0$CPIAUCSL, differences = 1)/data0$CPIAUCSL[-1])[-1])
 ```
 
 ```{r}
+# Inflation as time series
 inflation = data$CPIAUCSL %>% ts(start = c(year(data$date[1]),month(data$date[1])), frequency = 12)
 ```
 
+The resulting inflation series, which we want to forecast is shown below.
 
-\textcolor{blue}{Detalhe: estou usando a definição de inflação dada no enunciado $\pi_t = \frac{\Delta P_t}{P_t}$, que difere da definição usual $\pi_t = \frac{\Delta P_t}{P_{t-1}}$}
-
-```{r}
+```{r, }
 # plot inflation
 
 data %>% 
@@ -80,59 +90,27 @@ data %>%
   mutate(date = as.Date(date, format = '%m/%d/%Y')) %>%
   #filter(date>as.Date('2000-01-01')) %>%
   ggplot(aes(x = date, y = CPIAUCSL))+
-  geom_line()
+  geom_line()+
+  labs(title = 'Inflation (CPI, % mom)', x = NULL, y = NULL)
 ```
 
-
-## Item A
+Now, we shall start the estimations.
 
 ### AR
 
+In order to get some idea of what the order of our AR(p) process is, we plot the partial autocorrelation of the inflation series for a particular window.
+
 ```{r}
 # Partial autocorrelation
-pacf(inflation, lag.max = 24)
+inflation %>%
+  window(start = start(inflation), end = start(inflation) + c(0,492)) %>%
+  Pacf( lag.max = 24, plot = T)
 ```
 
-**Prediction**
-
-```{r, eval=FALSE}
-# isso aqui ta lerdo demais - refazer calculando o bic na mao mesmo
-tic()
-rolling_window <- 492
-p.max=4
-
-forecast = list()
-
-for(a in 0:(length(inflation)-rolling_window-1)){
-
-train = window(inflation, 
-               start = start(inflation)+c(0,a), 
-               end = start(inflation)+c(0,a+rolling_window-1) )
-test = window(inflation, 
-              start =  start(inflation)+c(0,a+rolling_window), 
-              end =  start(inflation)+c(0,a+rolling_window))
-
-bic.table = c()
-
-for(p in 0:p.max){
-  AR = arima(train, order = c(p,0,0))
-  bic.line = tibble("p"=p, "BIC" = BIC(AR))
-  bic.table = rbind(bic.table, bic.line)
-}
-
-p.opt = bic.table$p[which.min(bic.table$BIC)]
-
-AR = arima(train, order = c(p.opt,0,0))
-
-forecast[a+1] = predict(AR, n.ahead = 1)
-}
-
-forecast = forecast %>% unlist() %>% ts(start = start(forecast[[1]]), frequency = frequency(forecast[[1]]))
-toc()
-```
+We believe that a maximum lag of 24 is more than reasonable. Then, the determine the actual order p based on the BIC.
 
 ```{r}
-# function for calculating the BIC for AR models
+# Function for calculating the BIC for AR models
 BIC.ar <- function(model) {
   
   ssr <- sum(model$resid^2, na.rm = T)
@@ -144,22 +122,24 @@ BIC.ar <- function(model) {
 }
 ```
 
+We proceed with a rolling window one-step-ahead forecast, in which we choose the optimal order of the AR in each window of estimation.
 
 ```{r}
 # Rolling window forecasting
 rolling_window <- 492
-p.max=24
+p.max <- 24
 
-forecast = list()
+forecast1 = list()
 
 for(a in 0:(length(inflation)-rolling_window-1)){
 
+  # get the window for training the model
 train = window(inflation, 
                start = start(inflation)+c(0,a), 
                end = start(inflation)+c(0,a+rolling_window-1) )
-test = window(inflation, 
-              start =  start(inflation)+c(0,a+rolling_window), 
-              end =  start(inflation)+c(0,a+rolling_window))
+# test = window(inflation, 
+#               start =  start(inflation)+c(0,a+rolling_window), 
+#               end =  start(inflation)+c(0,a+rolling_window))
 
 bic.table = c()
 
@@ -174,29 +154,19 @@ p.opt = bic.table$p[which.min(bic.table$BIC)] # pick the optimal p
 
 AR =  ar(train, order.max = p.opt, method = 'ols', aic = F) # run the AR model with the optimal p
 
-forecast[[a+1]] = predict(AR, n.ahead = 1)$pred # one-step-ahead forecast
+forecast1[[a+1]] = predict(AR, n.ahead = 1)$pred # one-step-ahead forecast
 }
 
-forecast = forecast %>% unlist() %>% ts(start = start(forecast[[1]]), frequency =  frequency(forecast[[1]]) )
+forecasts = forecast1 %>% unlist() %>% 
+  ts(start = start(forecast1[[1]]), frequency =  frequency(forecast1[[1]]) )
 ```
 
-
-
-```{r}
-ts.plot(inflation, forecast, col = c("red", "blue") )
-```
-
-```{r}
-# Forecasting error
-error = inflation - forecast
-cum_squared_error = error^2 %>% cumsum() %>%
-  bind_cols(date = as.Date.yearmon(time(error))) %>%
-  setNames( c('AR.cse', 'date' ) )
-
-cum_squared_error %>%
-  ggplot(aes(x = date, y = AR.cse))+
-  geom_line()
-
+```{r, echo = F}
+inflation %>% window(start = c(1990,1)) %>%
+ts.plot(forecasts, col = c("red", "blue"),
+         gpars=list(ylab="Inflation", xlab=NULL, main = 'AR forecast'))
+legend("bottomleft", inset =0.05, legend=c("Inflation", "Forecast"), 
+       col = c("red", "blue"), lty=1)
 ```
 
 
@@ -204,39 +174,29 @@ cum_squared_error %>%
 
 1. PCA
 
+We do a Principal Component Analysis (PCA). Note that we must center and scale the data, since the series are in different scales.
+
 ```{r}
+# PCA
 pca = data %>% 
   select(-CPIAUCSL, -date) %>% 
-  prcomp(scale=TRUE)  
-#summary(pca)
-```
-
-```{r, eval=F}
-## get the name of the top 10 measurements that contribute
-## most to pc1.
-loading_scores <- pca$rotation[,1]
-gene_scores <- abs(loading_scores) ## get the magnitudes
-gene_score_ranked <- sort(gene_scores, decreasing=TRUE)
-top_10_genes <- names(gene_score_ranked[1:10])
- 
-top_10_genes ## show the names of the top 10 genes
- 
-pca$rotation[top_10_genes,1] ## show the scores (and +/- sign)
+  prcomp(center = TRUE, scale=TRUE)  
 ```
 
 2. Select PCs
 
-```{r}
+We can, then, choose the number of factors $k$ and select the first $k$ PCs. As seen in Question 1, there are different ways to choose the number of factors. We look at 3 common criterion (rule of thumb, informal way and biggest drop), but we opt for the rule of thumb as it seems to be the most parsimonious in this case. \textcolor{blue}{colocar alguma explicacao de qual criterio vamos adotar - usar rule of thumb q foi oq o masuko usou na 1}
+
+```{r, echo=F}
 pca.var <- pca$sdev^2
 pca.var.prop = data.frame( pc = 1:length(pca.var), var.prop = pca.var/sum(pca.var)) %>%
   mutate(var.prop.cum = cumsum(var.prop))
 
 pca.var.prop %>%
   ggplot(aes(x = pc, y = var.prop.cum)) +
-  geom_bar(stat = 'identity') +
+  geom_bar(stat = 'identity', fill = 'black') +
   labs(x = "Principal Component", y = "Variance Explained") +
-  ggtitle("Variance Explained by Principal Components")
-
+  ggtitle("Variance explained by principal components")
 ```
 
 ```{r}
@@ -246,31 +206,25 @@ pca.var.prop %>%
 
 pca.var.prop %>%
   filter(var.prop>=0.03) %>%
-  nrow()
-```
+  nrow() %>%
+  paste('(rule of thumb)')
 
-```{r}
 # Informal way (90%)
 
 pca.var.prop %>%
   filter(var.prop.cum<=0.9) %>%
-  nrow()
-```
+  nrow() %>%
+  paste('(informal way)')
 
-```{r}
 # Biggest drop 
 
 (lag(pca.var.prop$var.prop)/pca.var.prop$var.prop) %>%
-  which.max() -1 
-
-# ta certo isso? kkkkkkk
-
+  which.max() %>% -1 %>%
+  paste('(biggest drop)')
 ```
 
-\textcolor{blue}{colocar alguma explicacao de qual criterio vamos adotar - usar rule of thumb q foi oq o masuko usou na 1}
-
 ```{r}
-# usando rule of thumb
+# Using the rule of thumb
 n_pc = pca.var.prop %>%
   filter(var.prop>=0.03) %>%
   nrow()
@@ -278,24 +232,103 @@ n_pc = pca.var.prop %>%
 
 3. Regression
 
-\textcolor{red}{como escolher a ordem do AR? nao devia fazer isso conjuntamente com os fatores?}
+Given the number of factors, the order of the autoregressive component is determined by BIC in each rolling window.
 
 ```{r}
+# Get the factor from the PCA
 Factors = pca$x[,1:n_pc]
 
-# sepa usar um pacote de ARDL pra essa parte
+# Create the data matrix with the factors
+variables = cbind(inflation, Factors) 
 
-
+variables_withdate = variables %>%
+  bind_cols(date = as.Date.yearmon(time(inflation))) %>%
+  setNames(c('inflation', colnames(Factors), 'date'))
 ```
 
-
-4. Prediction
+We proceed with the rolling window one-step-ahead forecast.
 
 ```{r}
-#predict(model, newdata = )
+# Function for creating the proper data matrix based on the regression formula
+  
+  # Instead of manually creating data matrix, we use the dynlm() function and get only the $model component
+create_datamatrix = function(train, p.opt){
+  new = dynlm(inflation ~ L(inflation, 1:p.opt) + L(train[,-1] , 1), 
+              data = ts(rbind(train,0), start = start(train), frequency = frequency(train)) )
+  new = new$model %>% tail(1) %>% select(-inflation) %>% as.matrix()
+  return(new)
+}
 ```
 
+\textcolor{red}{paralelizar esse pedaco pra rodar mais rapido; acho q nao precisa do test nesse pedaco tambem. Se nao precisar entao ja tira daqui e do chunk do AR}
 
+```{r}
+# Rolling window forecasting
+rolling_window <- 492
+p.max <- 24
+
+forecast1 = list()
+
+for(a in 0:(length(inflation)-rolling_window-1)){
+
+train = window(variables, 
+               start = start(inflation)+c(0,a), 
+               end = start(inflation)+c(0,a+rolling_window-1) )
+test = window(variables, 
+              start =  start(inflation)+c(0,a+rolling_window), 
+              end =  start(inflation)+c(0,a+rolling_window))
+
+bic.table = rep(NA,p.max)
+
+for(p in 1:p.max){ # calculating the BIC for different orders of the AR(p)
+  AR_PC = dynlm(inflation ~ L(inflation, 1:p) + L(train[ ,-1] , 1), 
+              data = train)
+  bic.table[p] = BIC(AR_PC)
+}
+
+p.opt = which.min(bic.table) # pick the optimal p
+
+AR_PC = dynlm(inflation ~ L(inflation, 1:p.opt) + L(train[,-1] , 1), 
+              data = train)     # run the AR-PC model with the optimal p
+
+new = create_datamatrix(train, p.opt)
+  
+forecast1[[a+1]] = AR_PC$coefficients %*% c(1, new) # one-step-ahead forecast
+}
+
+forecast1 = forecast1 %>% unlist() %>% 
+  ts(start = start(inflation)+c(0,rolling_window), frequency =  frequency(inflation) )
+```
+
+```{r, echo=F}
+inflation %>% window(start = c(1990,1)) %>%
+ts.plot(forecast1, col = c("red", "blue"),
+         gpars=list(ylab="Inflation", xlab=NULL, main = 'AR+PC forecast'))
+legend("bottomleft", inset =0.05, legend=c("Inflation", "Forecast"), 
+       col = c("red", "blue"), lty=1)
+```
+
+## Item A
+
+```{r}
+# Forecasting error
+forecasts = cbind(AR = forecasts, AR_PC = forecast1) %>% as.ts()
+error = inflation - forecasts
+cum_error = sapply(error, function(x){x^2 %>% cumsum()}) %>%
+  bind_cols(date = as.Date.yearmon(time(error))) %>%
+  setNames( c('AR', 'AR_PC', 'date' ) )
+```
+
+```{r, echo = F}
+# Plot 
+cum_error %>%
+  gather(key = model, value=error, AR, AR_PC) %>% 
+  ggplot(aes(x = date, y = error, color = model))+
+  geom_line(size=1) +
+  geom_vline(xintercept = as.Date('2020-01-01'), linetype = 'dashed', size = 1)+
+  scale_color_lancet()+
+  labs(title = 'Cumulative squared errors', color = 'Model', y = NULL, x = NULL)
+```
 
 ### Ridge Regression
 
