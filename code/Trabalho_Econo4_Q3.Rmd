@@ -1,0 +1,157 @@
+---
+title: "Trabalho - Econometria IV"
+author: "Guilherme Luz, Guilherme Masuko, Caio Garzeri"
+date: "`r format(Sys.time(), '%B %Y')`"
+output: 
+  pdf_document: 
+    keep_tex: true
+geometry: margin=1in
+#bibliography: references.bib 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache = T, echo = T, tidy = TRUE, tidy.opts = list(width.cutoff = 60), warning = F, message = F)
+```
+
+```{r library, include=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(stargazer)
+library(kableExtra)
+library(gridExtra)
+library(ggsci) # color pallette
+library(tictoc)
+```
+
+```{r}
+library(lubridate) # for handling dates
+library(randomForest) # Random Forest implementation of the original Fortran code by Brieman (2001)
+library(ranger) # Faster implementation of Random Forest
+```
+
+
+```{r plot_setup, include=FALSE}
+# Configurações 
+theme_set(theme_linedraw())
+theme_update(title = element_text(family = 'serif'),
+             legend.text = element_text(family = 'serif')) 
+```
+
+```{r,  include=FALSE}
+# Data - Get objects from Question 2
+
+load('data/Q2_objects.Rda')
+
+forecasts_Q2 = forecasts
+rm(forecasts)
+```
+
+# Question 3
+
+## Item D
+
+In order to include the lags of the variables as covariates, we need to do an embedding process. \textcolor{red}{explicar}. (We do this inside the rolling window loop to avoid 'cheating').
+
+After this process, we can use the usual IID bootstrap, since we are interested in direct forecasting.
+
+```{r}
+# Embedding
+n_lags = 4 # number of lags to be embeded
+my_embed = function(df){
+Lags = list()
+Lags[[1]] = df %>% select(-date)
+for(i in 1:n_lags){
+  Lags[[i+1]] = df %>% select(-date) %>% 
+    mutate_all(function(x) lag(x, n = i))
+}
+RF_data = reduce(Lags, function(x,y){bind_cols(x,y, .name_repair = ~make.unique(.x))}) 
+
+return(RF_data)
+}
+```
+
+```{r forecast_loop}
+# Rolling window forecasting
+rolling_window <- 492
+
+# Random Forest parameters
+p = (1+n_lags)*ncol(data) # number of variables
+mtry = ((1/3)*p) %>% round() # number of variables randomly selected
+num.trees = 500 # number of trees
+min.bucket = 5 # minimal number of observations in each leave (terminal node)
+
+
+set.seed(1430)
+
+forecast1 = list()
+
+for(a in 1:(length(inflation)-rolling_window)){
+  # get the window for training the model
+  train = data[a:(a+rolling_window-1), ]
+  # embed
+  RF_data = my_embed(train)
+  # bind the embeded columns with the one-step-ahead inflation
+  RF_data = bind_cols(inflation.ahead = lead(inflation[a:(a+rolling_window-1)]), RF_data) 
+  
+  # Random forest estimation
+  RF = ranger(inflation.ahead ~.,
+              data = RF_data %>% na.omit(),
+              oob.error = T,
+              # Parameters below are set previously
+              mtry = mtry, 
+              num.trees = num.trees,
+              min.bucket = min.bucket)
+  
+  # Prediction
+  new = RF_data %>% select(-inflation.ahead) %>% tail(1)
+  forecast1[a] = predict(RF, data = new)
+}
+
+forecast1 = forecast1 %>% unlist() %>% 
+  ts(start = start(inflation)+c(0,rolling_window), frequency =  frequency(inflation) )
+```
+
+```{r}
+#print(RF)
+#beepr::beep(8)
+```
+
+```{r, echo=F}
+inflation %>% window(start = c(1990,1)) %>%
+ts.plot(forecast1, col = c("red", "blue"),
+         gpars=list(ylab="Inflation", xlab=NULL, main = 'AR+PC forecast'))
+legend("bottomleft", inset =0.05, legend=c("Inflation", "Forecast"), 
+       col = c("red", "blue"),  lty=1)
+```
+
+## Item E
+
+```{r}
+# Forecasting error
+forecasts = cbind(forecasts_Q2, RF = forecast1) %>% as.ts()
+error = inflation - forecasts
+cum_error = error %>% data.frame() %>%
+  mutate_all(function(x){(x^2) %>% cumsum()}) %>%
+  bind_cols(date = zoo::as.Date.yearmon(time(error))) %>%
+  setNames( c('AR', 'AR_PC', 'RF', 'date' ) )
+```
+
+```{r, echo = F}
+# Plot 
+cum_error %>%
+  gather(key = model, value = error, -date) %>% 
+  ggplot(aes(x = date, y = error, color = model)) +
+  geom_line(size=1) +
+  geom_vline(xintercept = as.Date('2020-01-01'), linetype = 'dashed', size = 1)+
+  scale_color_lancet()+
+  labs(title = 'Cumulative squared errors', color = 'Model', y = NULL, x = NULL)
+```
+
+```{r}
+beepr::beep()
+```
+
+
+
+
+
