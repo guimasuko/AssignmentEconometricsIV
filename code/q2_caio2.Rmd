@@ -1,0 +1,476 @@
+---
+title: "Trabalho - Econometria IV"
+author: "Guilherme Luz, Guilherme Masuko, Caio Garzeri"
+date: "`r format(Sys.time(), '%B %Y')`"
+output: 
+  pdf_document: 
+    keep_tex: true
+geometry: margin=1in
+#bibliography: references.bib 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache = T, echo = T, tidy = TRUE, tidy.opts = list(width.cutoff = 60), warning = F, message = F)
+```
+
+```{r library, include=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(stargazer)
+library(kableExtra)
+library(gridExtra)
+library(ggsci) # color pallette
+library(tictoc)
+```
+
+```{r}
+library(lubridate) # for handling dates
+library(zoo)
+library(dynlm) # for time series regressions
+library(forecast) # for the improved Pacf function
+library(glmnet)
+```
+
+
+```{r plot_setup, include=FALSE}
+# Configurações 
+theme_set(theme_linedraw())
+theme_update(title = element_text(family = 'serif'),
+             legend.text = element_text(family = 'serif')) 
+```
+
+
+# Question 2
+
+First of all, we must do some data wrangling.
+
+```{r}
+# Import the data
+raw_data = read_csv('C:/Users/Caio Garzeri/OneDrive - puc-rio.br/Econometria IV/2021-12.csv')
+data0 = raw_data[-1,] %>% select_if(~ !any(is.na(.)))
+transformation = raw_data[1,]
+```
+
+The suggested transformations (in order to make the series stationary) are indicated according to the following numeration.
+
+Transformation codes (from FRED):
+
+1. no transformation
+2. $\Delta x_t$
+3. $\Delta^2 x_t$ 
+4. $\log(x_t)$
+5. $\Delta \log(x_t)$
+6. $\Delta^2 \log(x_t)$
+7. $\Delta (x_t/x_{t-1} -1)$
+
+For the CPI, we apply a specific transformation to turn it into an inflation series. \textcolor{blue}{Detalhe: estou usando a definição de inflação dada no enunciado $\pi_t = \frac{\Delta P_t}{P_t}$, que difere da definição usual $\pi_t = \frac{\Delta P_t}{P_{t-1}}$}
+
+```{r}
+# Data transformations based on the FRED transformation codes
+data = data0 %>% select(-sasdate) %>% 
+  rename(SP500="S&P 500", SPINDUST="S&P: indust") %>%
+  BVAR::fred_transform(type = 'fred_md') %>%
+  bind_cols(tibble(date = data0$sasdate[3:length(data0$sasdate)])) %>%
+  mutate(date = as.Date(date, format = '%m/%d/%Y'))
+
+# For the CPI, we transform into an inflation series
+data = mutate(data, CPIAUCSL = 100*(diff(data0$CPIAUCSL, differences = 1)/data0$CPIAUCSL[-1])[-1])
+```
+
+```{r}
+# Inflation as time series
+inflation = data$CPIAUCSL %>% ts(start = c(year(data$date[1]),month(data$date[1])), frequency = 12)
+```
+
+The resulting inflation series, which we want to forecast is shown below.
+
+```{r, }
+# plot inflation
+
+data %>% 
+  select(date, CPIAUCSL) %>%
+  mutate(date = as.Date(date, format = '%m/%d/%Y')) %>%
+  #filter(date>as.Date('2000-01-01')) %>%
+  ggplot(aes(x = date, y = CPIAUCSL))+
+  geom_line()+
+  labs(title = 'Inflation (CPI, % mom)', x = NULL, y = NULL)
+```
+
+Now, we shall start the estimations.
+
+### AR
+
+In order to get some idea of what the order of our AR(p) process is, we plot the partial autocorrelation of the inflation series for a particular window.
+
+```{r}
+# Partial autocorrelation
+inflation %>%
+  window(start = start(inflation), end = start(inflation) + c(0,492)) %>%
+  Pacf( lag.max = 24, plot = T)
+```
+
+We believe that a maximum lag of 24 is more than reasonable. Then, we determine the actual order p based on the BIC.
+
+```{r}
+# Function for calculating the BIC for AR models
+BIC.ar <- function(model) {
+  
+  ssr <- sum(model$resid^2, na.rm = T)
+  t <- length(model$resid)
+  npar <- length(model$coef)
+  
+  return(c("p" = model$order,
+            "BIC" = log(ssr/t) + npar * log(t)/t))
+}
+```
+
+We proceed with a rolling window one-step-ahead forecast, in which we choose the optimal order of the AR in each window of estimation.
+
+```{r}
+# Rolling window forecasting
+rolling_window <- 492
+p.max <- 24
+
+forecast1 = list()
+
+for(a in 0:(length(inflation)-rolling_window-1)){
+
+  # get the window for training the model
+train = window(inflation, 
+               start = start(inflation)+c(0,a), 
+               end = start(inflation)+c(0,a+rolling_window-1) )
+# test = window(inflation, 
+#               start =  start(inflation)+c(0,a+rolling_window), 
+#               end =  start(inflation)+c(0,a+rolling_window))
+
+bic.table = c()
+
+for(p in 0:p.max){ # calculating the BIC for different orders of the AR(p)
+  AR = ar(train, order.max = p, method = 'ols', aic = F)
+  bic.line = BIC.ar(AR) 
+  bic.table = rbind(bic.table, bic.line)
+}
+bic.table = data.frame(bic.table)
+
+p.opt = bic.table$p[which.min(bic.table$BIC)] # pick the optimal p
+
+AR =  ar(train, order.max = p.opt, method = 'ols', aic = F) # run the AR model with the optimal p
+
+forecast1[[a+1]] = predict(AR, n.ahead = 1)$pred # one-step-ahead forecast
+}
+
+forecasts = forecast1 %>% unlist() %>% 
+  ts(start = start(forecast1[[1]]), frequency =  frequency(forecast1[[1]]) )
+```
+
+```{r, echo = F}
+inflation %>% window(start = c(1990,1)) %>%
+ts.plot(forecasts, col = c("red", "blue"),
+         gpars=list(ylab="Inflation", xlab=NULL, main = 'AR forecast'))
+legend("bottomleft", inset =0.05, legend=c("Inflation", "Forecast"), 
+       col = c("red", "blue"), lty=1)
+```
+
+
+### AR + PC
+
+1. PCA
+
+We do a Principal Component Analysis (PCA). Note that we must center and scale the data, since the series are in different scales.
+
+```{r}
+# PCA
+pca = data %>% 
+  select(-CPIAUCSL, -date) %>% 
+  prcomp(center = TRUE, scale=TRUE)  
+```
+
+2. Select PCs
+
+We can, then, choose the number of factors $k$ and select the first $k$ PCs. As seen in Question 1, there are different ways to choose the number of factors. We look at 3 common criterion (rule of thumb, informal way and biggest drop), but we opt for the rule of thumb as it seems to be the most parsimonious in this case. \textcolor{blue}{colocar alguma explicacao de qual criterio vamos adotar - usar rule of thumb q foi oq o masuko usou na 1}
+
+```{r, echo=F}
+pca.var <- pca$sdev^2
+pca.var.prop = data.frame( pc = 1:length(pca.var), var.prop = pca.var/sum(pca.var)) %>%
+  mutate(var.prop.cum = cumsum(var.prop))
+
+pca.var.prop %>%
+  ggplot(aes(x = pc, y = var.prop.cum)) +
+  geom_bar(stat = 'identity', fill = 'black') +
+  labs(x = "Principal Component", y = "Variance Explained") +
+  ggtitle("Variance explained by principal components")
+```
+
+```{r}
+# Choosing the number of PCs
+
+# Rule of thumb (3%)
+
+pca.var.prop %>%
+  filter(var.prop>=0.03) %>%
+  nrow() %>%
+  paste('(rule of thumb)')
+
+# Informal way (90%)
+
+pca.var.prop %>%
+  filter(var.prop.cum<=0.9) %>%
+  nrow() %>%
+  paste('(informal way)')
+
+# Biggest drop 
+
+(lag(pca.var.prop$var.prop)/pca.var.prop$var.prop) %>%
+  which.max() %>% -1 %>%
+  paste('(biggest drop)')
+```
+
+```{r}
+# Using the rule of thumb
+n_pc = pca.var.prop %>%
+  filter(var.prop>=0.03) %>%
+  nrow()
+```
+
+3. Regression
+
+Given the number of factors, the order of the autoregressive component is determined by BIC in each rolling window.
+
+```{r}
+# Get the factor from the PCA
+Factors = pca$x[,1:n_pc]
+
+# Create the data matrix with the factors
+variables = cbind(inflation, Factors) 
+
+variables_withdate = variables %>%
+  bind_cols(date = as.Date.yearmon(time(inflation))) %>%
+  setNames(c('inflation', colnames(Factors), 'date'))
+```
+
+We proceed with the rolling window one-step-ahead forecast.
+
+```{r}
+# Function for creating the proper data matrix based on the regression formula
+  
+  # Instead of manually creating data matrix, we use the dynlm() function and get only the $model component
+create_datamatrix = function(train, p.opt){
+  new = dynlm(inflation ~ L(inflation, 1:p.opt) + L(train[,-1] , 1), 
+              data = ts(rbind(train,0), start = start(train), frequency = frequency(train)) )
+  new = new$model %>% tail(1) %>% select(-inflation) %>% as.matrix()
+  return(new)
+}
+```
+
+\textcolor{red}{paralelizar esse pedaco pra rodar mais rapido; acho q nao precisa do test nesse pedaco tambem. Se nao precisar entao ja tira daqui e do chunk do AR}
+
+```{r}
+# Rolling window forecasting
+rolling_window <- 492
+p.max <- 24
+
+forecast1 = list()
+
+for(a in 0:(length(inflation)-rolling_window-1)){
+
+train = window(variables, 
+               start = start(inflation)+c(0,a), 
+               end = start(inflation)+c(0,a+rolling_window-1) )
+test = window(variables, 
+              start =  start(inflation)+c(0,a+rolling_window), 
+              end =  start(inflation)+c(0,a+rolling_window))
+
+bic.table = rep(NA,p.max)
+
+for(p in 1:p.max){ # calculating the BIC for different orders of the AR(p)
+  AR_PC = dynlm(inflation ~ L(inflation, 1:p) + L(train[ ,-1] , 1), 
+              data = train)
+  bic.table[p] = BIC(AR_PC)
+}
+
+p.opt = which.min(bic.table) # pick the optimal p
+
+AR_PC = dynlm(inflation ~ L(inflation, 1:p.opt) + L(train[,-1] , 1), 
+              data = train)     # run the AR-PC model with the optimal p
+
+new = create_datamatrix(train, p.opt)
+  
+forecast1[[a+1]] = AR_PC$coefficients %*% c(1, new) # one-step-ahead forecast
+}
+
+forecast1 = forecast1 %>% unlist() %>% 
+  ts(start = start(inflation)+c(0,rolling_window), frequency =  frequency(inflation) )
+```
+
+```{r, echo=F}
+inflation %>% window(start = c(1990,1)) %>%
+ts.plot(forecast1, col = c("red", "blue"),
+         gpars=list(ylab="Inflation", xlab=NULL, main = 'AR+PC forecast'))
+legend("bottomleft", inset =0.05, legend=c("Inflation", "Forecast"), 
+       col = c("red", "blue"), lty=1)
+```
+
+## Item A
+
+```{r}
+# Forecasting error
+forecasts = cbind(AR = forecasts, AR_PC = forecast1) %>% as.ts()
+error = inflation - forecasts
+cum_error = sapply(error, function(x){x^2 %>% cumsum()}) %>%
+  bind_cols(date = as.Date.yearmon(time(error))) %>%
+  setNames( c('AR', 'AR_PC', 'date' ) )
+```
+
+```{r, echo = F}
+# Plot 
+cum_error %>%
+  gather(key = model, value=error, AR, AR_PC) %>% 
+  ggplot(aes(x = date, y = error, color = model))+
+  geom_line(size=1) +
+  geom_vline(xintercept = as.Date('2020-01-01'), linetype = 'dashed', size = 1)+
+  scale_color_lancet()+
+  labs(title = 'Cumulative squared errors', color = 'Model', y = NULL, x = NULL)
+```
+
+
+### RIDGE
+
+We will choose penalty term according to the BIC criterion. However we must decide on the number of lags in the model 
+and this criterion is obviously silent about this issue. Our strategy will be to run the models with 1, 2, 3 and 4 lags and 
+choose the model with the smallest SME.
+
+```{r}
+#Create dataframes with lags
+datalag1 <- data
+datalag2 <- data
+datalag3 <- data
+datalag4 <- data
+
+for (col_name in names(data)) {
+  lvar1 <- lag(data[[col_name]], 1) ;lvar2 <- lag(data[[col_name]], 2); lvar3 <- lag(data[[col_name]], 3); lvar4 <- lag(data[[col_name]], 4)
+  colnamelag1 <- paste0(col_name, "_lag1"); colnamelag2 <- paste0(col_name, "_lag2"); colnamelag3 <- paste0(col_name, "_lag3"); colnamelag4 <- paste0(col_name, "_lag4")
+  datalag1[colnamelag1] <- lvar1
+  datalag2[colnamelag1] <- lvar1 ; datalag2[colnamelag2] <- lvar2 
+  datalag3[colnamelag1] <- lvar1 ; datalag3[colnamelag2] <- lvar2; datalag3[colnamelag3] <- lvar3 
+  datalag4[colnamelag1] <- lvar1 ; datalag4[colnamelag2] <- lvar2; datalag4[colnamelag3] <- lvar3 ; datalag4[colnamelag4] <- lvar4
+}
+
+datalag1 <- na.omit(datalag1) ; dataXlag1 <- datalag1 %>% select(-c(CPIAUCSL)) ; dataYlag1 <- datalag1 %>% select(CPIAUCSL)
+datalag2 <- na.omit(datalag2) ; dataXlag2 <- datalag2 %>% select(-c(CPIAUCSL)) ; dataYlag2 <- datalag2 %>% select(CPIAUCSL)
+datalag3 <- na.omit(datalag3) ; dataXlag3 <- datalag3 %>% select(-c(CPIAUCSL)) ; dataYlag3 <- datalag3 %>% select(CPIAUCSL)
+datalag4 <- na.omit(datalag4) ; dataXlag4 <- datalag4 %>% select(-c(CPIAUCSL)) ; dataYlag4 <- datalag4 %>% select(CPIAUCSL)
+
+```
+
+We will use cv.glmet from HDeconometrics to pick lambda according to the Bayesian Information Criterion. Credits go to Gabriel Vasconcelos. In choosing the best model, 
+the number of windows will have to be the number of windows of the model with more lags (lag4)
+
+```{r}
+MSE <- data.frame (lag1 = numeric((nrow(dataYlag4) - rolling_window)),
+                   lag2 = numeric((nrow(dataYlag4) - rolling_window)),
+                   lag3 = numeric((nrow(dataYlag4) - rolling_window)),
+                   lag4 = numeric((nrow(dataYlag4) - rolling_window)))
+                   
+#RIDGE 
+
+for(a in 1:(nrow(dataYlag4) - rolling_window)){
+  
+  print(paste0("Starting window ", a ))
+  
+  #slice data
+  X1 <- dataXlag1[(a+3):(a+rolling_window-1 +3),]
+  Y1 <- dataYlag1[(a+3):(a+rolling_window-1 +3),]
+  Xnew1 <- dataXlag1[(a+rolling_window-1 +3 + 1),]
+  Yobs1 <- dataYlag1[(a+rolling_window-1 +3 +1),]
+  
+  
+  X2 <- dataXlag2[(a+2):(a+rolling_window-1 +2),]
+  Y2 <- dataYlag2[(a+2):(a+rolling_window-1 +2),]
+  Xnew2 <- dataXlag2[(a+rolling_window-1 +2 +1),]
+  Yobs2 <- dataYlag2[(a+rolling_window-1 +2 +1),,]
+  
+  
+  X3 <- dataXlag3[(a+1):(a+rolling_window-1 +1),]
+  Y3 <- dataYlag3[(a+1):(a+rolling_window-1 +1),]
+  Xnew3 <- dataXlag3[(a+rolling_window-1 +1 +1),]
+  Yobs3 <- dataYlag3[(a+rolling_window-1 +1 +1),]
+  
+  X4 <- dataXlag4[a:(a+rolling_window-1),]
+  Y4 <- dataYlag4[a:(a+rolling_window-1),]
+  Xnew4 <- dataXlag4[(a+rolling_window-1 +1),]
+  Yobs4 <- dataYlag4[(a+rolling_window-1 +1),]
+  
+  #estimate RIDGE and predict for each model
+  print("Starting Estimation for 1 lag")
+  
+  icridge <- ic.glmnet(X1, Y1, crit="bic", alpha=0)
+  ridge <- glmnet(X1, Y1, alpha=0)
+  pred = predict(ridge, newx = data.matrix(Xnew1), s=icridge$lambda)
+  MSE_RIDGE = (Yobs1 - pred)^2
+  MSE$lag1[a] <- MSE_RIDGE
+  
+  print("Starting Estimation for 2 lags")
+  icridge <- ic.glmnet(X2, Y2, crit="bic", alpha=0)
+  ridge <- glmnet(X2, Y2, alpha=0)
+  pred = predict(ridge, newx = data.matrix(Xnew2), s=icridge$lambda)
+  MSE_RIDGE = (Yobs2 - pred)^2
+  MSE$lag2[a] <- MSE_RIDGE
+  
+  print("Starting Estimation for 3 lags")
+  icridge <- ic.glmnet(X3, Y3, crit="bic", alpha=0)
+  ridge <- glmnet(X3, Y3, alpha=0)
+  pred = predict(ridge, newx = data.matrix(Xnew3), s=icridge$lambda)
+  MSE_RIDGE = (Yobs3 - pred)^2
+  MSE$lag3[a] <- MSE_RIDGE
+  
+  print("Starting Estimation for 4 lags")
+  icridge <- ic.glmnet(X4, Y4, crit="bic", alpha=0)
+  ridge <- glmnet(X4, Y4, alpha=0)
+  pred = predict(ridge, newx = data.matrix(Xnew4), s=icridge$lambda)
+  MSE_RIDGE = (Yobs4 - pred)^2
+  MSE$lag4[a] <- MSE_RIDGE
+}
+
+
+
+
+```
+
+```{r}
+#Evaluate cumulative mean squared errors
+
+MSE_RIDGE<- MSE
+
+MSE_RIDGE <- MSE_RIDGE %>% mutate(lag1cum = cumsum(lag1),
+                                  lag2cum = cumsum(lag2),
+                                  lag3cum = cumsum(lag3),
+                                  lag4cum = cumsum(lag4))
+
+
+start_date <- as.Date("1999-03-01")
+end_date <- as.Date("2021-11-30")
+month_sequence <- seq(start_date, end_date, by = "months")
+date <- tail(month_sequence, 257)
+
+MSE_RIDGE$date <- date
+
+
+MSE_RIDGE %>% ggplot(aes(x = date)) +
+  geom_line(aes(y = lag1cum, color = "1lag"), size = 1) +
+  geom_line(aes(y = lag2cum, color = "2lags"), size = 1) +
+  geom_line(aes(y = lag3cum, color = "3lags"), size = 1) +
+  geom_line(aes(y = lag4cum, color = "4lags"), size = 1) +
+  labs(x = "Date", y = "MSE", title = "Cumulative MSE - RIDGE diff lags") +
+  scale_color_manual(values = c("1lag" = "blue", "2lags" = "red", "3lags" = "green", "4lags" = "yellow")) +
+  theme_minimal()
+
+
+
+
+
+
+
+
+```
+
+
