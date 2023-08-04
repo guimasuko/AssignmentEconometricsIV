@@ -46,7 +46,7 @@ First of all, we must do some data wrangling.
 
 ```{r}
 # Import the data
-raw_data = read_csv('C:/Users/Caio Garzeri/OneDrive - puc-rio.br/Econometria IV/2021-12.csv')
+raw_data = read.csv('/home/caio/Documentos/lasso/2021-12.csv')
 data0 = raw_data[-1,] %>% select_if(~ !any(is.na(.)))
 transformation = raw_data[1,]
 ```
@@ -68,7 +68,7 @@ For the CPI, we apply a specific transformation to turn it into an inflation ser
 ```{r}
 # Data transformations based on the FRED transformation codes
 data = data0 %>% select(-sasdate) %>% 
-  rename(SP500="S&P 500", SPINDUST="S&P: indust") %>%
+  rename(SP500="S.P.500", SPINDUST="S.P..indust") %>%
   BVAR::fred_transform(type = 'fred_md') %>%
   bind_cols(tibble(date = data0$sasdate[3:length(data0$sasdate)])) %>%
   mutate(date = as.Date(date, format = '%m/%d/%Y'))
@@ -366,7 +366,15 @@ We will use cv.glmet from HDeconometrics to pick lambda according to the Bayesia
 the number of windows will have to be the number of windows of the model with more lags (lag4)
 
 ```{r}
-MSE <- data.frame (lag1 = numeric((nrow(dataYlag4) - rolling_window)),
+MSE_RIDGE <- data.frame (date = data0$sasdate[(length(data0$sasdate)-256):length(data0$sasdate)],
+                   lag1 = numeric((nrow(dataYlag4) - rolling_window)),
+                   lag2 = numeric((nrow(dataYlag4) - rolling_window)),
+                   lag3 = numeric((nrow(dataYlag4) - rolling_window)),
+                   lag4 = numeric((nrow(dataYlag4) - rolling_window)))
+
+
+fcst_RIDGE <-  data.frame (date = data0$sasdate[(length(data0$sasdate)-256):length(data0$sasdate)],
+                   lag1 = numeric((nrow(dataYlag4) - rolling_window)),
                    lag2 = numeric((nrow(dataYlag4) - rolling_window)),
                    lag3 = numeric((nrow(dataYlag4) - rolling_window)),
                    lag4 = numeric((nrow(dataYlag4) - rolling_window)))
@@ -406,29 +414,33 @@ for(a in 1:(nrow(dataYlag4) - rolling_window)){
   icridge <- ic.glmnet(X1, Y1, crit="bic", alpha=0)
   ridge <- glmnet(X1, Y1, alpha=0)
   pred = predict(ridge, newx = data.matrix(Xnew1), s=icridge$lambda)
-  MSE_RIDGE = (Yobs1 - pred)^2
-  MSE$lag1[a] <- MSE_RIDGE
+  MSERIDGE = (Yobs1 - pred)^2
+  MSE_RIDGE$lag1[a] <- MSERIDGE
+  fcst_RIDGE$lag1[a] <- pred
   
   print("Starting Estimation for 2 lags")
   icridge <- ic.glmnet(X2, Y2, crit="bic", alpha=0)
   ridge <- glmnet(X2, Y2, alpha=0)
   pred = predict(ridge, newx = data.matrix(Xnew2), s=icridge$lambda)
-  MSE_RIDGE = (Yobs2 - pred)^2
-  MSE$lag2[a] <- MSE_RIDGE
+  MSERIDGE = (Yobs2 - pred)^2
+  MSE_RIDGE$lag2[a] <- MSERIDGE
+  fcst_RIDGE$lag2[a] <- pred
   
   print("Starting Estimation for 3 lags")
   icridge <- ic.glmnet(X3, Y3, crit="bic", alpha=0)
   ridge <- glmnet(X3, Y3, alpha=0)
   pred = predict(ridge, newx = data.matrix(Xnew3), s=icridge$lambda)
-  MSE_RIDGE = (Yobs3 - pred)^2
-  MSE$lag3[a] <- MSE_RIDGE
+  MSERIDGE = (Yobs3 - pred)^2
+  MSE_RIDGE$lag3[a] <- MSERIDGE
+  fcst_RIDGE$lag3[a] <- pred
   
   print("Starting Estimation for 4 lags")
   icridge <- ic.glmnet(X4, Y4, crit="bic", alpha=0)
   ridge <- glmnet(X4, Y4, alpha=0)
   pred = predict(ridge, newx = data.matrix(Xnew4), s=icridge$lambda)
-  MSE_RIDGE = (Yobs4 - pred)^2
-  MSE$lag4[a] <- MSE_RIDGE
+  MSERIDGE = (Yobs4 - pred)^2
+  MSE_RIDGE$lag4[a] <- MSERIDGE
+  fcst_RIDGE$lag4[a] <- pred
 }
 
 
@@ -439,21 +451,12 @@ for(a in 1:(nrow(dataYlag4) - rolling_window)){
 ```{r}
 #Evaluate cumulative mean squared errors
 
-MSE_RIDGE<- MSE
-
 MSE_RIDGE <- MSE_RIDGE %>% mutate(lag1cum = cumsum(lag1),
                                   lag2cum = cumsum(lag2),
                                   lag3cum = cumsum(lag3),
                                   lag4cum = cumsum(lag4))
 
-
-start_date <- as.Date("1999-03-01")
-end_date <- as.Date("2021-11-30")
-month_sequence <- seq(start_date, end_date, by = "months")
-date <- tail(month_sequence, 257)
-
-MSE_RIDGE$date <- date
-
+MSE_RIDGE$date <- as.Date(MSE_RIDGE$date)
 
 MSE_RIDGE %>% ggplot(aes(x = date)) +
   geom_line(aes(y = lag1cum, color = "1lag"), size = 1) +
@@ -464,13 +467,114 @@ MSE_RIDGE %>% ggplot(aes(x = date)) +
   scale_color_manual(values = c("1lag" = "blue", "2lags" = "red", "3lags" = "green", "4lags" = "yellow")) +
   theme_minimal()
 
+```
+
+##LASSO
+
+```{r}
+MSELASSO <- data.frame (date = data0$sasdate[(length(data0$sasdate)-256):length(data0$sasdate)],
+                   lag1 = numeric((nrow(dataYlag4) - rolling_window)),
+                   lag2 = numeric((nrow(dataYlag4) - rolling_window)),
+                   lag3 = numeric((nrow(dataYlag4) - rolling_window)),
+                   lag4 = numeric((nrow(dataYlag4) - rolling_window)))
 
 
+fcst_LASSO <- data.frame (date = data0$sasdate[(length(data0$sasdate)-256):length(data0$sasdate)],
+                   lag1 = numeric((nrow(dataYlag4) - rolling_window)),
+                   lag2 = numeric((nrow(dataYlag4) - rolling_window)),
+                   lag3 = numeric((nrow(dataYlag4) - rolling_window)),
+                   lag4 = numeric((nrow(dataYlag4) - rolling_window)))
 
-
-
+                   
+for(a in 1:(nrow(dataYlag4) - rolling_window)){
+  
+  print(paste0("Starting window ", a ))
+  
+  #slice data
+  X1 <- dataXlag1[(a+3):(a+rolling_window-1 +3),]
+  Y1 <- dataYlag1[(a+3):(a+rolling_window-1 +3),]
+  Xnew1 <- dataXlag1[(a+rolling_window-1 +3 + 1),]
+  Yobs1 <- dataYlag1[(a+rolling_window-1 +3 +1),]
+  
+  
+  X2 <- dataXlag2[(a+2):(a+rolling_window-1 +2),]
+  Y2 <- dataYlag2[(a+2):(a+rolling_window-1 +2),]
+  Xnew2 <- dataXlag2[(a+rolling_window-1 +2 +1),]
+  Yobs2 <- dataYlag2[(a+rolling_window-1 +2 +1),,]
+  
+  
+  X3 <- dataXlag3[(a+1):(a+rolling_window-1 +1),]
+  Y3 <- dataYlag3[(a+1):(a+rolling_window-1 +1),]
+  Xnew3 <- dataXlag3[(a+rolling_window-1 +1 +1),]
+  Yobs3 <- dataYlag3[(a+rolling_window-1 +1 +1),]
+  
+  X4 <- dataXlag4[a:(a+rolling_window-1),]
+  Y4 <- dataYlag4[a:(a+rolling_window-1),]
+  Xnew4 <- dataXlag4[(a+rolling_window-1 +1),]
+  Yobs4 <- dataYlag4[(a+rolling_window-1 +1),]
+  
+  #estimate LASSO and predict for each model
+  print("Starting Estimation for 1 lag")
+  
+  iclasso <- ic.glmnet(X1, Y1, crit="bic", alpha=1)
+  lasso <- glmnet(X1, Y1, alpha=1)
+  pred = predict(lasso, newx = data.matrix(Xnew1), s=iclasso$lambda)
+  MSE_LASSO = (Yobs1 - pred)^2
+  MSELASSO$lag1[a] <- MSE_LASSO
+  fcst_LASSO$lag1[a] <- pred
+  
+  
+  print("Starting Estimation for 2 lags")
+  iclasso <- ic.glmnet(X2, Y2, crit="bic", alpha=1)
+  lasso <- glmnet(X2, Y2, alpha=1)
+  pred = predict(lasso, newx = data.matrix(Xnew2), s=iclasso$lambda)
+  MSE_LASSO = (Yobs2 - pred)^2
+  MSELASSO$lag2[a] <- MSE_LASSO
+  fcst_LASSO$lag2[a] <- pred
+  
+  print("Starting Estimation for 3 lags")
+  iclasso <- ic.glmnet(X3, Y3, crit="bic", alpha=1)
+  lasso <- glmnet(X3, Y3, alpha=1)
+  pred = predict(lasso, newx = data.matrix(Xnew3), s=iclasso$lambda)
+  MSE_LASSO = (Yobs3 - pred)^2
+  MSELASSO$lag3[a] <- MSE_LASSO
+  fcst_LASSO$lag3[a] <- pred
+  
+  print("Starting Estimation for 4 lags")
+  iclasso <- ic.glmnet(X4, Y4, crit="bic", alpha=1)
+  lasso <- glmnet(X4, Y4, alpha=1)
+  pred = predict(lasso, newx = data.matrix(Xnew4), s=iclasso$lambda)
+  MSE_LASSO = (Yobs4 - pred)^2
+  MSELASSO$lag4[a] <- MSE_LASSO
+  fcst_LASSO$lag4[a] <- pred
+}
 
 
 ```
 
+
+```{r}
+#Evaluate cumulative mean squared errors
+
+MSELASSO <- MSELASSO %>% mutate(lag1cum = cumsum(lag1),
+                                lag2cum = cumsum(lag2),
+                                lag3cum = cumsum(lag3),
+                                lag4cum = cumsum(lag4))
+
+MSELASSO$date = as.Date(MSELASSO$date)
+
+MSELASSO %>% ggplot(aes(x = date)) +
+  geom_line(aes(y = lag1cum, color = "1lag"), size = 1) +
+  geom_line(aes(y = lag2cum, color = "2lags"), size = 1) +
+  geom_line(aes(y = lag3cum, color = "3lags"), size = 1) +
+  geom_line(aes(y = lag4cum, color = "4lags"), size = 1) +
+  labs(x = "Date", y = "MSE", title = "Cumulative MSE - LASSO diff lags") +
+  scale_color_manual(values = c("1lag" = "blue", "2lags" = "red", "3lags" = "green", "4lags" = "yellow")) +
+  theme_minimal()
+
+```
+write.csv(MSELASSO, "/home/caio/Documentos/lasso/mselasso.csv")
+write.csv(MSE_RIDGE, "/home/caio/Documentos/lasso/mseridge.csv")
+write.csv(fcst_LASSO, "/home/caio/Documentos/lasso/fcstlasso.csv")
+write.csv(fcst_RIDGE, "/home/caio/Documentos/lasso/fcstridge.csv")
 
