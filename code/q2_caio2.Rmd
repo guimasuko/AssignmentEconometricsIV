@@ -611,3 +611,13 @@ MSE_LASSO %>% ggplot(aes(x = date)) +
   theme_minimal()
 
 ```
+
+write.csv(MSE_LASSO, "C:\\Users\\Caio Garzeri\\OneDrive - puc-rio.br\\Econometria IV\\AssignmentEconometricsIV\\output\\mselasso.csv")
+write.csv(MSE_RIDGE, "C:\\Users\\Caio Garzeri\\OneDrive - puc-rio.br\\Econometria IV\\AssignmentEconometricsIV\\output\\mseridge.csv")
+write.csv(fcst_LASSO, "C:\\Users\\Caio Garzeri\\OneDrive - puc-rio.br\\Econometria IV\\AssignmentEconometricsIV\\output\\fcstlasso.csv")
+write.csv(fcst_RIDGE, "C:\\Users\\Caio Garzeri\\OneDrive - puc-rio.br\\Econometria IV\\AssignmentEconometricsIV\\output\\fcstlasso.csv")
+
+
+
+
+
