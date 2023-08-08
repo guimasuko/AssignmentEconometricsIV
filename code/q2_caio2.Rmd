@@ -46,7 +46,8 @@ First of all, we must do some data wrangling.
 
 ```{r}
 # Import the data
-raw_data = read.csv('/home/caio/Documentos/lasso/2021-12.csv')
+#raw_data = read.csv('/home/caio/Documentos/lasso/2021-12.csv')
+raw_data = read.csv("C:\\Users\\Caio Garzeri\\OneDrive - puc-rio.br\\Econometria IV\\2021-12.csv")
 data0 = raw_data[-1,] %>% select_if(~ !any(is.na(.)))
 transformation = raw_data[1,]
 ```
@@ -340,13 +341,16 @@ and this criterion is obviously silent about this issue. Our strategy will be to
 choose the model with the smallest SME.
 
 ```{r}
-#Create dataframes with lags
-datalag1 <- data
-datalag2 <- data
-datalag3 <- data
-datalag4 <- data
+#RW
+rolling_window <- 492
 
-for (col_name in names(data)) {
+#Create dataframes with lags
+datalag1 <- data %>% select(-c(date))
+datalag2 <- data %>% select(-c(date))
+datalag3 <- data %>% select(-c(date))
+datalag4 <- data %>% select(-c(date))
+
+for (col_name in names(datalag1)) {
   lvar1 <- lag(data[[col_name]], 1) ;lvar2 <- lag(data[[col_name]], 2); lvar3 <- lag(data[[col_name]], 3); lvar4 <- lag(data[[col_name]], 4)
   colnamelag1 <- paste0(col_name, "_lag1"); colnamelag2 <- paste0(col_name, "_lag2"); colnamelag3 <- paste0(col_name, "_lag3"); colnamelag4 <- paste0(col_name, "_lag4")
   datalag1[colnamelag1] <- lvar1
@@ -362,54 +366,35 @@ datalag4 <- na.omit(datalag4) ; dataXlag4 <- datalag4 %>% select(-c(CPIAUCSL)) ;
 
 ```
 
-We will use cv.glmet from HDeconometrics to pick lambda according to the Bayesian Information Criterion. Credits go to Gabriel Vasconcelos. In choosing the best model, 
-the number of windows will have to be the number of windows of the model with more lags (lag4)
+We will use cv.glmet from HDeconometrics to pick lambda according to the Bayesian Information Criterion. Credits go to Gabriel Vasconcelos.
 
 ```{r}
-MSE_RIDGE <- data.frame (date = data0$sasdate[(length(data0$sasdate)-256):length(data0$sasdate)],
-                   lag1 = numeric((nrow(dataYlag4) - rolling_window)),
-                   lag2 = numeric((nrow(dataYlag4) - rolling_window)),
-                   lag3 = numeric((nrow(dataYlag4) - rolling_window)),
-                   lag4 = numeric((nrow(dataYlag4) - rolling_window)))
+MSE_RIDGE <- data.frame (date = data0$sasdate[(length(data0$sasdate)-259):length(data0$sasdate)],
+                   lag1 = numeric((nrow(dataYlag1) - rolling_window)),
+                   lag2 = numeric((nrow(dataYlag1) - rolling_window)),
+                   lag3 = numeric((nrow(dataYlag1) - rolling_window)),
+                   lag4 = numeric((nrow(dataYlag1) - rolling_window)))
 
 
-fcst_RIDGE <-  data.frame (date = data0$sasdate[(length(data0$sasdate)-256):length(data0$sasdate)],
-                   lag1 = numeric((nrow(dataYlag4) - rolling_window)),
-                   lag2 = numeric((nrow(dataYlag4) - rolling_window)),
-                   lag3 = numeric((nrow(dataYlag4) - rolling_window)),
-                   lag4 = numeric((nrow(dataYlag4) - rolling_window)))
+fcst_RIDGE <- data.frame (date = data0$sasdate[(length(data0$sasdate)-259):length(data0$sasdate)],
+                   lag1 = numeric((nrow(dataYlag1) - rolling_window)),
+                   lag2 = numeric((nrow(dataYlag1) - rolling_window)),
+                   lag3 = numeric((nrow(dataYlag1) - rolling_window)),
+                   lag4 = numeric((nrow(dataYlag1) - rolling_window)))
                    
 #RIDGE 
 
-for(a in 1:(nrow(dataYlag4) - rolling_window)){
-  
+# 1 lag - 752 obs
+#1st   window  001 to 492 - predict 493
+#260th window  260 to 751 - predict 752
+
+print("Starting estimation for RIDGE with 1 lag ")
+for (a in 1:260){
   print(paste0("Starting window ", a ))
-  
-  #slice data
-  X1 <- dataXlag1[(a+3):(a+rolling_window-1 +3),]
-  Y1 <- dataYlag1[(a+3):(a+rolling_window-1 +3),]
-  Xnew1 <- dataXlag1[(a+rolling_window-1 +3 + 1),]
-  Yobs1 <- dataYlag1[(a+rolling_window-1 +3 +1),]
-  
-  
-  X2 <- dataXlag2[(a+2):(a+rolling_window-1 +2),]
-  Y2 <- dataYlag2[(a+2):(a+rolling_window-1 +2),]
-  Xnew2 <- dataXlag2[(a+rolling_window-1 +2 +1),]
-  Yobs2 <- dataYlag2[(a+rolling_window-1 +2 +1),,]
-  
-  
-  X3 <- dataXlag3[(a+1):(a+rolling_window-1 +1),]
-  Y3 <- dataYlag3[(a+1):(a+rolling_window-1 +1),]
-  Xnew3 <- dataXlag3[(a+rolling_window-1 +1 +1),]
-  Yobs3 <- dataYlag3[(a+rolling_window-1 +1 +1),]
-  
-  X4 <- dataXlag4[a:(a+rolling_window-1),]
-  Y4 <- dataYlag4[a:(a+rolling_window-1),]
-  Xnew4 <- dataXlag4[(a+rolling_window-1 +1),]
-  Yobs4 <- dataYlag4[(a+rolling_window-1 +1),]
-  
-  #estimate RIDGE and predict for each model
-  print("Starting Estimation for 1 lag")
+  X1 <- dataXlag1[a:(a+rolling_window-1),]
+  Y1 <- dataYlag1[a:(a+rolling_window-1),]
+  Xnew1 <- dataXlag1[(a+rolling_window),]
+  Yobs1 <- dataYlag1[(a+rolling_window),]
   
   icridge <- ic.glmnet(X1, Y1, crit="bic", alpha=0)
   ridge <- glmnet(X1, Y1, alpha=0)
@@ -417,34 +402,68 @@ for(a in 1:(nrow(dataYlag4) - rolling_window)){
   MSERIDGE = (Yobs1 - pred)^2
   MSE_RIDGE$lag1[a] <- MSERIDGE
   fcst_RIDGE$lag1[a] <- pred
+}
+
+# 2lags - 751 obs
+#1st   window  001 to 492 - predict 493
+#259th window  259 to 750 - predict 751
+
+print("Starting estimation for RIDGE with 2 lags ")
+for (a in 1:259){
+  print(paste0("Starting window ", a ))
+  X2 <- dataXlag2[a:(a+rolling_window-1),]
+  Y2 <- dataYlag2[a:(a+rolling_window-1),]
+  Xnew2 <- dataXlag2[(a+rolling_window),]
+  Yobs2 <- dataYlag2[(a+rolling_window),]
   
-  print("Starting Estimation for 2 lags")
   icridge <- ic.glmnet(X2, Y2, crit="bic", alpha=0)
   ridge <- glmnet(X2, Y2, alpha=0)
   pred = predict(ridge, newx = data.matrix(Xnew2), s=icridge$lambda)
   MSERIDGE = (Yobs2 - pred)^2
-  MSE_RIDGE$lag2[a] <- MSERIDGE
-  fcst_RIDGE$lag2[a] <- pred
+  MSE_RIDGE$lag2[a+1] <- MSERIDGE
+  fcst_RIDGE$lag2[a+1] <- pred
+}
+
+# 3lags - 750 obs
+#1st   window  001 to 492 - predict 493
+#258th window  258 to 749 - predict 750
+
+print("Starting estimation for RIDGE with 3 lags ")
+for (a in 1:258){
+  print(paste0("Starting window ", a ))
+  X3 <- dataXlag3[a:(a+rolling_window-1),]
+  Y3 <- dataYlag3[a:(a+rolling_window-1),]
+  Xnew3 <- dataXlag3[(a+rolling_window),]
+  Yobs3 <- dataYlag3[(a+rolling_window),]
   
-  print("Starting Estimation for 3 lags")
   icridge <- ic.glmnet(X3, Y3, crit="bic", alpha=0)
   ridge <- glmnet(X3, Y3, alpha=0)
   pred = predict(ridge, newx = data.matrix(Xnew3), s=icridge$lambda)
   MSERIDGE = (Yobs3 - pred)^2
-  MSE_RIDGE$lag3[a] <- MSERIDGE
-  fcst_RIDGE$lag3[a] <- pred
-  
-  print("Starting Estimation for 4 lags")
+  MSE_RIDGE$lag3[a+2] <- MSERIDGE
+  fcst_RIDGE$lag3[a+2] <- pred
+} 
+
+# 4lags - 749 obs
+#1st   window  001 to 492 - predict 493
+#257th window  257 to 748 - predict 749  
+
+print("Starting estimation for RIDGE with 4 lags ")
+for( a in 1:257){
+  print(paste0("Starting window ", a ))
+  X4 <- dataXlag4[a:(a+rolling_window-1),]
+  Y4 <- dataYlag4[a:(a+rolling_window-1),]
+  Xnew4 <- dataXlag4[(a+rolling_window),]
+  Yobs4 <- dataYlag4[(a+rolling_window),]
   icridge <- ic.glmnet(X4, Y4, crit="bic", alpha=0)
   ridge <- glmnet(X4, Y4, alpha=0)
   pred = predict(ridge, newx = data.matrix(Xnew4), s=icridge$lambda)
   MSERIDGE = (Yobs4 - pred)^2
-  MSE_RIDGE$lag4[a] <- MSERIDGE
-  fcst_RIDGE$lag4[a] <- pred
+  MSE_RIDGE$lag4[a+3] <- MSERIDGE
+  fcst_RIDGE$lag4[a+3] <- pred
 }
 
-
-
+print("RIDGE estimation done.")
 
 ```
 
@@ -456,7 +475,9 @@ MSE_RIDGE <- MSE_RIDGE %>% mutate(lag1cum = cumsum(lag1),
                                   lag3cum = cumsum(lag3),
                                   lag4cum = cumsum(lag4))
 
-MSE_RIDGE$date <- as.Date(MSE_RIDGE$date)
+MSE_RIDGE$date <- data0$sasdate[(length(data0$sasdate)-259):length(data0$sasdate)]
+                                
+MSE_RIDGE$date <- as.Date(MSE_RIDGE$date, format = "%m/%d/%Y")                  
 
 MSE_RIDGE %>% ggplot(aes(x = date)) +
   geom_line(aes(y = lag1cum, color = "1lag"), size = 1) +
@@ -472,83 +493,100 @@ MSE_RIDGE %>% ggplot(aes(x = date)) +
 ##LASSO
 
 ```{r}
-MSELASSO <- data.frame (date = data0$sasdate[(length(data0$sasdate)-256):length(data0$sasdate)],
-                   lag1 = numeric((nrow(dataYlag4) - rolling_window)),
-                   lag2 = numeric((nrow(dataYlag4) - rolling_window)),
-                   lag3 = numeric((nrow(dataYlag4) - rolling_window)),
-                   lag4 = numeric((nrow(dataYlag4) - rolling_window)))
+MSE_LASSO <- data.frame (date = data0$sasdate[(length(data0$sasdate)-259):length(data0$sasdate)],
+                   lag1 = numeric((nrow(dataYlag1) - rolling_window)),
+                   lag2 = numeric((nrow(dataYlag1) - rolling_window)),
+                   lag3 = numeric((nrow(dataYlag1) - rolling_window)),
+                   lag4 = numeric((nrow(dataYlag1) - rolling_window)))
 
 
-fcst_LASSO <- data.frame (date = data0$sasdate[(length(data0$sasdate)-256):length(data0$sasdate)],
-                   lag1 = numeric((nrow(dataYlag4) - rolling_window)),
-                   lag2 = numeric((nrow(dataYlag4) - rolling_window)),
-                   lag3 = numeric((nrow(dataYlag4) - rolling_window)),
-                   lag4 = numeric((nrow(dataYlag4) - rolling_window)))
-
+fcst_LASSO <- data.frame (date = data0$sasdate[(length(data0$sasdate)-259):length(data0$sasdate)],
+                   lag1 = numeric((nrow(dataYlag1) - rolling_window)),
+                   lag2 = numeric((nrow(dataYlag1) - rolling_window)),
+                   lag3 = numeric((nrow(dataYlag1) - rolling_window)),
+                   lag4 = numeric((nrow(dataYlag1) - rolling_window)))
                    
-for(a in 1:(nrow(dataYlag4) - rolling_window)){
-  
+#LASSO 
+
+# 1 lag - 752 obs
+#1st   window  001 to 492 - predict 493
+#260th window  260 to 751 - predict 752
+
+print("Starting estimation for LASSO with 1 lag ")
+for (a in 1:260){
   print(paste0("Starting window ", a ))
-  
-  #slice data
-  X1 <- dataXlag1[(a+3):(a+rolling_window-1 +3),]
-  Y1 <- dataYlag1[(a+3):(a+rolling_window-1 +3),]
-  Xnew1 <- dataXlag1[(a+rolling_window-1 +3 + 1),]
-  Yobs1 <- dataYlag1[(a+rolling_window-1 +3 +1),]
-  
-  
-  X2 <- dataXlag2[(a+2):(a+rolling_window-1 +2),]
-  Y2 <- dataYlag2[(a+2):(a+rolling_window-1 +2),]
-  Xnew2 <- dataXlag2[(a+rolling_window-1 +2 +1),]
-  Yobs2 <- dataYlag2[(a+rolling_window-1 +2 +1),,]
-  
-  
-  X3 <- dataXlag3[(a+1):(a+rolling_window-1 +1),]
-  Y3 <- dataYlag3[(a+1):(a+rolling_window-1 +1),]
-  Xnew3 <- dataXlag3[(a+rolling_window-1 +1 +1),]
-  Yobs3 <- dataYlag3[(a+rolling_window-1 +1 +1),]
-  
-  X4 <- dataXlag4[a:(a+rolling_window-1),]
-  Y4 <- dataYlag4[a:(a+rolling_window-1),]
-  Xnew4 <- dataXlag4[(a+rolling_window-1 +1),]
-  Yobs4 <- dataYlag4[(a+rolling_window-1 +1),]
-  
-  #estimate LASSO and predict for each model
-  print("Starting Estimation for 1 lag")
+  X1 <- dataXlag1[a:(a+rolling_window-1),]
+  Y1 <- dataYlag1[a:(a+rolling_window-1),]
+  Xnew1 <- dataXlag1[(a+rolling_window),]
+  Yobs1 <- dataYlag1[(a+rolling_window),]
   
   iclasso <- ic.glmnet(X1, Y1, crit="bic", alpha=1)
   lasso <- glmnet(X1, Y1, alpha=1)
   pred = predict(lasso, newx = data.matrix(Xnew1), s=iclasso$lambda)
-  MSE_LASSO = (Yobs1 - pred)^2
-  MSELASSO$lag1[a] <- MSE_LASSO
+  MSELASSO = (Yobs1 - pred)^2
+  MSE_LASSO$lag1[a] <- MSELASSO
   fcst_LASSO$lag1[a] <- pred
+}
+
+# 2lags - 751 obs
+#1st   window  001 to 492 - predict 493
+#259th window  259 to 750 - predict 751
+
+print("Starting estimation for LASSO with 2 lags ")
+for (a in 1:259){
+  print(paste0("Starting window ", a ))
+  X2 <- dataXlag2[a:(a+rolling_window-1),]
+  Y2 <- dataYlag2[a:(a+rolling_window-1),]
+  Xnew2 <- dataXlag2[(a+rolling_window),]
+  Yobs2 <- dataYlag2[(a+rolling_window),]
   
-  
-  print("Starting Estimation for 2 lags")
   iclasso <- ic.glmnet(X2, Y2, crit="bic", alpha=1)
   lasso <- glmnet(X2, Y2, alpha=1)
   pred = predict(lasso, newx = data.matrix(Xnew2), s=iclasso$lambda)
-  MSE_LASSO = (Yobs2 - pred)^2
-  MSELASSO$lag2[a] <- MSE_LASSO
-  fcst_LASSO$lag2[a] <- pred
+  MSELASSO = (Yobs2 - pred)^2
+  MSE_LASSO$lag2[a+1] <- MSELASSO
+  fcst_LASSO$lag2[a+1] <- pred
+}
+
+# 3lags - 750 obs
+#1st   window  001 to 492 - predict 493
+#258th window  258 to 749 - predict 750
+
+print("Starting estimation for LASSO with 3 lags ")
+for (a in 1:258){
+  print(paste0("Starting window ", a ))
+  X3 <- dataXlag3[a:(a+rolling_window-1),]
+  Y3 <- dataYlag3[a:(a+rolling_window-1),]
+  Xnew3 <- dataXlag3[(a+rolling_window),]
+  Yobs3 <- dataYlag3[(a+rolling_window),]
   
-  print("Starting Estimation for 3 lags")
   iclasso <- ic.glmnet(X3, Y3, crit="bic", alpha=1)
   lasso <- glmnet(X3, Y3, alpha=1)
   pred = predict(lasso, newx = data.matrix(Xnew3), s=iclasso$lambda)
-  MSE_LASSO = (Yobs3 - pred)^2
-  MSELASSO$lag3[a] <- MSE_LASSO
-  fcst_LASSO$lag3[a] <- pred
+  MSELASSO = (Yobs3 - pred)^2
+  MSE_LASSO$lag3[a+2] <- MSELASSO
+  fcst_LASSO$lag3[a+2] <- pred
+} 
+
+# 4lags - 749 obs
+#1st   window  001 to 492 - predict 493
+#257th window  257 to 748 - predict 749  
+
+print("Starting estimation for RIDGE with 4 lags ")
+for( a in 1:257){
+  print(paste0("Starting window ", a ))
+  X4 <- dataXlag4[a:(a+rolling_window-1),]
+  Y4 <- dataYlag4[a:(a+rolling_window-1),]
+  Xnew4 <- dataXlag4[(a+rolling_window),]
+  Yobs4 <- dataYlag4[(a+rolling_window),]
   
-  print("Starting Estimation for 4 lags")
   iclasso <- ic.glmnet(X4, Y4, crit="bic", alpha=1)
   lasso <- glmnet(X4, Y4, alpha=1)
   pred = predict(lasso, newx = data.matrix(Xnew4), s=iclasso$lambda)
-  MSE_LASSO = (Yobs4 - pred)^2
-  MSELASSO$lag4[a] <- MSE_LASSO
-  fcst_LASSO$lag4[a] <- pred
+  MSELASSO = (Yobs4 - pred)^2
+  MSE_LASSO$lag4[a+3] <- MSELASSO
+  fcst_LASSO$lag4[a+3] <- pred
 }
-
 
 ```
 
@@ -556,14 +594,14 @@ for(a in 1:(nrow(dataYlag4) - rolling_window)){
 ```{r}
 #Evaluate cumulative mean squared errors
 
-MSELASSO <- MSELASSO %>% mutate(lag1cum = cumsum(lag1),
+MSE_LASSO <- MSE_LASSO %>% mutate(lag1cum = cumsum(lag1),
                                 lag2cum = cumsum(lag2),
                                 lag3cum = cumsum(lag3),
                                 lag4cum = cumsum(lag4))
 
-MSELASSO$date = as.Date(MSELASSO$date)
+MSE_LASSO$date <- as.Date(MSE_LASSO$date, format = "%m/%d/%Y")   
 
-MSELASSO %>% ggplot(aes(x = date)) +
+MSE_LASSO %>% ggplot(aes(x = date)) +
   geom_line(aes(y = lag1cum, color = "1lag"), size = 1) +
   geom_line(aes(y = lag2cum, color = "2lags"), size = 1) +
   geom_line(aes(y = lag3cum, color = "3lags"), size = 1) +
@@ -573,8 +611,3 @@ MSELASSO %>% ggplot(aes(x = date)) +
   theme_minimal()
 
 ```
-write.csv(MSELASSO, "/home/caio/Documentos/lasso/mselasso.csv")
-write.csv(MSE_RIDGE, "/home/caio/Documentos/lasso/mseridge.csv")
-write.csv(fcst_LASSO, "/home/caio/Documentos/lasso/fcstlasso.csv")
-write.csv(fcst_RIDGE, "/home/caio/Documentos/lasso/fcstridge.csv")
-
