@@ -25,9 +25,17 @@ library(tictoc)
 
 ```{r}
 library(lubridate) # for handling dates
-library(zoo)
+library(zoo) # for time series
 library(dynlm) # for time series regressions
 library(forecast) # for the improved Pacf function
+library(glmnet) # for shrinkage methods
+library(HDeconometrics) # IC for glmnet
+
+# Packages for parallel computation
+library(future)
+library(foreach)
+library(doFuture)
+library(doRNG)
 ```
 
 
@@ -174,7 +182,7 @@ legend("bottomleft", inset =0.05, legend=c("Inflation", "Forecast"),
 
 1. PCA
 
-We do a Principal Component Analysis (PCA). Note that we must center and scale the data, since the series are in different scales.
+We do a Principal Component Analysis (PCA). Note that we must center and scale the data, since the series are in different scales. \textcolor{red}{depois pra fazer previsao deveria me preocupar com isso?}
 
 ```{r}
 # PCA
@@ -194,9 +202,9 @@ pca.var.prop = data.frame( pc = 1:length(pca.var), var.prop = pca.var/sum(pca.va
 
 pca.var.prop %>%
   ggplot(aes(x = pc, y = var.prop.cum)) +
-  geom_bar(stat = 'identity', fill = 'black') +
+  geom_bar(stat = 'identity', fill = '#00468BFF') +
   labs(x = "Principal Component", y = "Variance Explained") +
-  ggtitle("Variance explained by principal components")
+  ggtitle("Variance explained by principal components") 
 ```
 
 ```{r}
@@ -308,31 +316,209 @@ legend("bottomleft", inset =0.05, legend=c("Inflation", "Forecast"),
        col = c("red", "blue"), lty=1)
 ```
 
+```{r}
+# Save forecasts
+forecasts = cbind(AR = forecasts, AR_PC = forecast1) %>% as.ts()
+```
+
+### Ridge Regression
+
+We will choose penalty term according to the BIC. However, we must decide on the number of lags in the model 
+and this criterion is obviously silent about this issue. Our strategy will be to run the models with 1, 2, 3 and 4 lags and 
+choose the model with the smallest MSE.
+
+```{r}
+# Embedding
+my_embed = function(df, n_lags = 4){
+Lags = list()
+Lags[[1]] = df %>% select(-contains('date'))
+for(i in 1:n_lags){
+  Lags[[i+1]] = df %>% select(-contains('date')) %>% 
+    mutate_all(function(x) lag(x, n = i))
+}
+lagged_data = reduce(Lags, function(x,y){bind_cols(x,y, .name_repair = ~make.unique(.x))}) 
+
+return(lagged_data)
+}
+```
+
+
+```{r forecast_loop_Ridge}
+tic()
+# Rolling window forecasting
+rolling_window <- 492
+
+# glmnet parameter
+my_alpha = 0 # Ridge
+
+forecast1 = list()
+
+# set up parallel computation
+registerDoFuture()
+plan("multisession", workers = 3) # use 3 cores 
+
+forecast1 = foreach(a = 1:(length(inflation)-rolling_window)) %dorng% { 
+  # get the window for training the model
+  train = data[a:(a+rolling_window-1), ]
+  # embed
+  reg_data = my_embed(train)
+  # bind the embeded columns with the one-step-ahead inflation
+  reg_data = bind_cols(inflation.ahead = lead(inflation[a:(a+rolling_window-1)]), reg_data)
+  
+  # Ridge estimation
+  ic_ridge <- ic.glmnet(x = reg_data %>% na.omit() %>% select(-inflation.ahead), 
+                        y = reg_data %>% na.omit() %>% select(inflation.ahead) %>% data.matrix(), 
+                        crit="bic", alpha= my_alpha)
+  ridge <- glmnet(x = reg_data %>% na.omit() %>% select(-inflation.ahead), 
+                  y = reg_data %>% na.omit() %>% select(inflation.ahead) %>% data.matrix(), 
+                  alpha=my_alpha, lambda = ic_ridge$lambda)
+  
+  # Prediction
+  new = reg_data %>% select(-inflation.ahead) %>% tail(1)
+  result = predict(ridge, newx = data.matrix(new), s=ic_ridge$lambda)
+  
+  result
+}
+
+forecast1 = forecast1 %>% unlist() %>% 
+  ts(start = start(inflation)+c(0,rolling_window), frequency =  frequency(inflation) )
+toc()
+
+beepr::beep()
+```
+
+```{r, echo=F}
+inflation %>% window(start = c(1990,1)) %>%
+ts.plot(forecast1, col = c("red", "blue"),
+         gpars=list(ylab="Inflation", xlab=NULL, main = 'Ridge forecast'))
+legend("bottomleft", inset =0.05, legend=c("Inflation", "Forecast"), 
+       col = c("red", "blue"), lty=1)
+```
+
+```{r}
+# Save forecasts
+forecasts = cbind.zoo(forecasts, Ridge = forecast1) %>% as.ts()
+```
+
+
+### LASSO Regression
+
+```{r forecast_loop_LASSO}
+# Rolling window forecasting
+rolling_window <- 492
+
+# glmnet parameter
+my_alpha = 1 # LASSO
+
+forecast1 = list()
+
+for(a in 1:(length(inflation)-rolling_window)){
+  # get the window for training the model
+  train = data[a:(a+rolling_window-1), ]
+  # embed
+  reg_data = my_embed(train)
+  # bind the embeded columns with the one-step-ahead inflation
+  reg_data = bind_cols(inflation.ahead = lead(inflation[a:(a+rolling_window-1)]), reg_data) 
+  
+  # Ridge estimation
+  ic_ridge <- ic.glmnet(x = reg_data %>% na.omit() %>% select(-inflation.ahead), 
+                        y = reg_data %>% na.omit() %>% select(inflation.ahead) %>% data.matrix(), 
+                        crit="bic", alpha = my_alpha)
+  ridge <- glmnet(x = reg_data %>% na.omit() %>% select(-inflation.ahead), 
+                  y = reg_data %>% na.omit() %>% select(inflation.ahead) %>% data.matrix(),
+                  alpha = my_alpha, lambda = ic_ridge$lambda)
+  
+  # Prediction
+  new = reg_data %>% select(-inflation.ahead) %>% tail(1)
+  forecast1[a] = predict(ridge, newx = data.matrix(new), s=ic_ridge$lambda)
+}
+
+forecast1 = forecast1 %>% unlist() %>% 
+  ts(start = start(inflation)+c(0,rolling_window), frequency =  frequency(inflation) )
+```
+
+```{r forecast_loop_LASSO_test, eval=FALSE}
+# Rolling window forecasting
+rolling_window <- 492
+
+# glmnet parameter
+my_alpha = 1 # LASSO
+
+forecast1 = list()
+
+for(a in 1:(length(inflation)-rolling_window)){
+  # get the window for training the model
+  train = data[a:(a+rolling_window-1), ] %>% select(-CPIAUCSL)
+  train_cpi = data[a:(a+rolling_window-1), ] %>% select(CPIAUCSL)
+  # embed
+  reg_data = my_embed(train, n_lags = 1) 
+  cpi_lags = my_embed(train_cpi, n_lags = 24)
+  # bind the embeded columns with the one-step-ahead inflation
+  reg_data = bind_cols(inflation.ahead = lead(inflation[a:(a+rolling_window-1)]), 
+                       cpi_lags, reg_data) %>%
+    na.omit()
+  
+  # LASSO estimation
+  ic_lasso <- ic.glmnet(x = reg_data %>% select(-inflation.ahead), 
+                        y = reg_data$inflation.ahead, 
+                        crit="bic", alpha = my_alpha)
+  lasso <- glmnet(x = reg_data %>% select(-inflation.ahead), 
+                  y = reg_data$inflation.ahead,
+                  alpha = my_alpha, lambda = ic_lasso$lambda)
+  
+  # Prediction
+  new = reg_data %>% select(-inflation.ahead) %>% tail(1)
+  forecast1[a] = predict(lasso, newx = data.matrix(new), s=ic_lasso$lambda)
+}
+
+forecast1 = forecast1 %>% unlist() %>% 
+  ts(start = start(inflation)+c(0,rolling_window), frequency =  frequency(inflation) )
+```
+
+
+```{r, echo=F}
+inflation %>% window(start = c(1990,1)) %>%
+ts.plot(forecast1, col = c("red", "blue"),
+         gpars=list(ylab="Inflation", xlab=NULL, main = 'LASSO forecast'))
+legend("bottomleft", inset =0.05, legend=c("Inflation", "Forecast"), 
+       col = c("red", "blue"), lty=1)
+```
+
+```{r}
+# Save forecasts
+forecasts = cbind.zoo(forecasts, LASSO = forecast1) %>% as.ts()
+```
+
 ## Item A
 
 ```{r}
 # Forecasting error
-forecasts = cbind(AR = forecasts, AR_PC = forecast1) %>% as.ts()
 error = inflation - forecasts
 cum_error = sapply(error, function(x){x^2 %>% cumsum()}) %>%
   bind_cols(date = as.Date.yearmon(time(error))) %>%
-  setNames( c('AR', 'AR_PC', 'date' ) )
+  setNames( c('AR', 'AR_PC', 'Ridge', 'LASSO', 'date' ) )
 ```
 
 ```{r, echo = F}
 # Plot 
-cum_error %>%
-  gather(key = model, value=error, AR, AR_PC) %>% 
-  ggplot(aes(x = date, y = error, color = model))+
-  geom_line(size=1) +
+cum_error %>% 
+  gather(key = model, value = error, -date) %>% 
+  ggplot(aes(x = date, y = error, color = model)) +
+  geom_line(size=0.8) +
   geom_vline(xintercept = as.Date('2020-01-01'), linetype = 'dashed', size = 1)+
   scale_color_lancet()+
   labs(title = 'Cumulative squared errors', color = 'Model', y = NULL, x = NULL)
 ```
 
-### Ridge Regression
 
-### LASSO Regression
+
+
+```{r}
+# Save data for Question 3
+save(data, inflation, forecasts, file = 'data/Q2_objects.Rda')
+write.csv( forecasts, file = "output/forecasts.csv" )
+write.csv( cum_error, file = "output/cum_error.csv" )
+```
 
 
 
