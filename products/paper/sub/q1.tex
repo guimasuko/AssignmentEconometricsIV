@@ -1,0 +1,47 @@
+The first question consists of a factor analysis of a large dataset. We consider monthly close-to-close excess returns from a cross-section of 9,456 firms traded in the New York Stock Exchange.
+The data starts on November 1991 and runs until December 2018. There are 326 monthly
+observations in total. 
+
+In addition to the returns we also consider 16 monthly factors:
+ 
+\begin{itemize}
+	\item Market (MKT)
+	\item Small-minus-Big (SMB)
+	\item High-minus-Low (HML)
+	\item Conservative-minus-Aggressive (CMA)
+	\item Robust-minus-Weak (RMW)
+	\item earning/price ratio (EP)
+	\item cash-flow/price ratio (CFP)
+	\item dividend/price ratio
+	\item accruals (ACC)
+	\item market beta (BETA)
+	\item net share issues 
+	\item daily variance (RETVOL)
+	\item daily idiosyncratic variance (IDIOVOL)
+	\item 1-month momentum (MOM1)
+	\item 36-month momentum (MOM36)
+\end{itemize}
+
+The dataset is organized as an excel file named \texttt{returns.xlsx}.
+
+
+\subsection{(a) (30 points)}
+Compute the principal components of the returns and determine the optimal number of principal factors by one the methods described in Lecture 2. How much of the variance will the factors be able to explain?
+
+
+
+
+\subsection{(b) (30 points)}
+Regress the selected factors on the 16 observed "anomaly" factors described above. How do the "principal component factors" relate to the "anomaly factors"?
+
+
+
+
+\subsection{(c) (30 points)}
+Now, run a principal component analysis on the 16 "anomaly factors" and select the optimal number of principal components using the same criterion adopted in the first item of the exercise. By inspecting the principal eigenvectors can you identify a dominating "anomaly"?
+
+
+
+
+\subsection{(d) (30 points)}
+How do the "anomaly-based principal factors" related to the "return-based principal factors"?

@@ -118,3 +118,42 @@ def OLS_regression(y: pd.DataFrame, X: pd.DataFrame, y_column: str = "PC 1", is_
     plt.title(f'{y_column} vs {cov_name}');
 
     return(results)
+
+
+import glmnet_python.glmnet_python
+from cvglmnet import cvglmnet
+from cvglmnetPredict import cvglmnetPredict
+from cvglmnetPlot import cvglmnetPlot
+from cvglmnetCoef import cvglmnetCoef
+
+
+
+def Ridge(X_train: pd.DataFrame, y_train: pd.Series, X_test: pd.DataFrame, y_test: pd.Series) -> tuple:
+    # Ridge Model
+    
+    # standarize the data
+    Xtrain = (X_train.values - X_train.mean(axis=0).values)/X_train.std(axis=0).values
+    Xtest = (X_test.values - X_train.mean(axis=0).values)/X_train.std(axis=0).values
+
+    # model
+    ridge_model = cvglmnet(x = Xtrain.copy(), y = y_train.copy(), ptype='mse', nfolds=10, alpha=0)
+    y_pred = cvglmnetPredict(ridge_model, newx=Xtest, s = 'lambda_min').ravel()
+    error_pred = (y_test - y_pred)**2
+
+    return(y_pred, error_pred)
+
+
+
+def LASSO(X_train: pd.DataFrame, y_train: pd.Series, X_test: pd.DataFrame, y_test: pd.Series) -> tuple:
+    # LASSO Model
+    
+    # standarize the data
+    Xtrain = (X_train.values - X_train.mean(axis=0).values)/X_train.std(axis=0).values
+    Xtest = (X_test.values - X_train.mean(axis=0).values)/X_train.std(axis=0).values
+
+    # model
+    lasso_model = cvglmnet(x = Xtrain.copy(), y = y_train.copy(), ptype='mse', nfolds=10, alpha=1)
+    y_pred = cvglmnetPredict(lasso_model, newx=Xtest, s = 'lambda_min').ravel()
+    error_pred = (y_test - y_pred)**2
+
+    return(y_pred, error_pred)
