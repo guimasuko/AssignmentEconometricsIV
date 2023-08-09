@@ -572,7 +572,7 @@ for (a in 1:258){
 #1st   window  001 to 492 - predict 493
 #257th window  257 to 748 - predict 749  
 
-print("Starting estimation for RIDGE with 4 lags ")
+print("Starting estimation for LASSO with 4 lags ")
 for( a in 1:257){
   print(paste0("Starting window ", a ))
   X4 <- dataXlag4[a:(a+rolling_window-1),]
