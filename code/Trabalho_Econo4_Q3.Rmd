@@ -124,11 +124,16 @@ legend("bottomleft", inset =0.05, legend=c("Inflation", "Forecast"),
        col = c("red", "blue"),  lty=1)
 ```
 
+```{r, include=FALSE}
+# Save forecast
+forecasts = cbind(forecasts_Q2, RF = forecast1) %>% as.ts()
+```
+
+
 ## Item E
 
 ```{r}
 # Forecasting error
-forecasts = cbind(forecasts_Q2, RF = forecast1) %>% as.ts()
 error = inflation - forecasts
 cum_error = error %>% data.frame() %>%
   mutate_all(function(x){(x^2) %>% cumsum()}) %>%
@@ -147,9 +152,6 @@ cum_error %>%
   labs(title = 'Cumulative squared errors', color = 'Model', y = NULL, x = NULL)
 ```
 
-```{r}
-beepr::beep()
-```
 
 
 
