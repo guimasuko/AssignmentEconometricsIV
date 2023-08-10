@@ -96,7 +96,6 @@ The resulting inflation series, which we want to forecast is shown below.
 data %>% 
   select(date, CPIAUCSL) %>%
   mutate(date = as.Date(date, format = '%m/%d/%Y')) %>%
-  #filter(date>as.Date('2000-01-01')) %>%
   ggplot(aes(x = date, y = CPIAUCSL))+
   geom_line()+
   labs(title = 'Inflation (CPI, % mom)', x = NULL, y = NULL)
@@ -145,9 +144,6 @@ for(a in 0:(length(inflation)-rolling_window-1)){
 train = window(inflation, 
                start = start(inflation)+c(0,a), 
                end = start(inflation)+c(0,a+rolling_window-1) )
-# test = window(inflation, 
-#               start =  start(inflation)+c(0,a+rolling_window), 
-#               end =  start(inflation)+c(0,a+rolling_window))
 
 bic.table = c()
 
@@ -268,23 +264,24 @@ create_datamatrix = function(train, p.opt){
 }
 ```
 
-\textcolor{red}{paralelizar esse pedaco pra rodar mais rapido; acho q nao precisa do test nesse pedaco tambem. Se nao precisar entao ja tira daqui e do chunk do AR}
 
-```{r}
+```{r forecast_loop_AR_PC}
 # Rolling window forecasting
 rolling_window <- 492
 p.max <- 24
 
 forecast1 = list()
 
-for(a in 0:(length(inflation)-rolling_window-1)){
+# set up parallel computation
+registerDoFuture()
+plan("multisession", workers = 3) # use 3 cores 
+
+# Loop
+forecast1 = foreach(a = 0:(length(inflation)-rolling_window-1)) %dorng% { 
 
 train = window(variables, 
                start = start(inflation)+c(0,a), 
                end = start(inflation)+c(0,a+rolling_window-1) )
-test = window(variables, 
-              start =  start(inflation)+c(0,a+rolling_window), 
-              end =  start(inflation)+c(0,a+rolling_window))
 
 bic.table = rep(NA,p.max)
 
@@ -301,7 +298,8 @@ AR_PC = dynlm(inflation ~ L(inflation, 1:p.opt) + L(train[,-1] , 1),
 
 new = create_datamatrix(train, p.opt)
   
-forecast1[[a+1]] = AR_PC$coefficients %*% c(1, new) # one-step-ahead forecast
+result = AR_PC$coefficients %*% c(1, new) # one-step-ahead forecast
+result
 }
 
 forecast1 = forecast1 %>% unlist() %>% 
@@ -329,12 +327,15 @@ choose the model with the smallest MSE.
 
 ```{r}
 # Embedding
+# function that creates n_lags of all variables of a given data frame
 my_embed = function(df, n_lags = 4){
 Lags = list()
 Lags[[1]] = df %>% select(-contains('date'))
-for(i in 1:n_lags){
-  Lags[[i+1]] = df %>% select(-contains('date')) %>% 
-    mutate_all(function(x) lag(x, n = i))
+if(n_lags>=1){
+  for(i in 1:n_lags){
+    Lags[[i+1]] = df %>% select(-contains('date')) %>% 
+      mutate_all(function(x) lag(x, n = i))
+  }
 }
 lagged_data = reduce(Lags, function(x,y){bind_cols(x,y, .name_repair = ~make.unique(.x))}) 
 
@@ -390,7 +391,73 @@ beepr::beep()
 ```{r, echo=F}
 inflation %>% window(start = c(1990,1)) %>%
 ts.plot(forecast1, col = c("red", "blue"),
-         gpars=list(ylab="Inflation", xlab=NULL, main = 'Ridge forecast'))
+         gpars=list(ylab="Inflation", xlab=NULL, main = 'Ridge forecast',
+                    sub = 'Using 4 lags of all variables'))
+legend("bottomleft", inset =0.05, legend=c("Inflation", "Forecast"), 
+       col = c("red", "blue"), lty=1)
+```
+
+```{r}
+# Save forecasts
+forecasts = cbind.zoo(forecasts, Ridge_4lags = forecast1) %>% as.ts()
+```
+
+The forecast of the Ridge regression with 4 lags has a notably bad fit to the actual inflation series. We noticed that, since the ridge is not able to give a sparse solution, when there are too many variables, the estimated model becomes basically an intercept and almost all the other coefficients are very close to zero (but not zero). Hence, we tested other (more parsimonious) specifications. When we include the all the macroeconomics variables - without any lags - and lags of the CPI, we get a more reasonable result. The results are very robust to the number of CPI lags, so we keep 4 lags, as initially intended. 
+
+```{r forecast_loop_Ridge_other}
+tic()
+# Rolling window forecasting
+rolling_window <- 492
+
+# glmnet parameter
+my_alpha = 0 # Ridge
+
+forecast1 = list()
+
+# set up parallel computation
+registerDoFuture()
+plan("multisession", workers = 3) # use 3 cores 
+
+last_fcst = (length(inflation)-rolling_window)
+
+forecast1 = foreach(a = 1:last_fcst) %dorng% { 
+  # get the window for training the model
+  train = data[a:(a+rolling_window-1), ] %>% select(-CPIAUCSL)
+  train_cpi = data[a:(a+rolling_window-1), ] %>% select(CPIAUCSL)
+  # embed
+  reg_data = my_embed(train, n_lags = 0) 
+  cpi_lags = my_embed(train_cpi, n_lags = 4)
+  # bind the embeded columns with the one-step-ahead inflation
+  reg_data = bind_cols(inflation.ahead = lead(inflation[a:(a+rolling_window-1)]), 
+                       cpi_lags, reg_data)
+  
+  # Ridge estimation
+  ic_ridge <- ic.glmnet(x = reg_data %>% na.omit() %>% select(-inflation.ahead), 
+                        y = reg_data %>% na.omit() %>% select(inflation.ahead) %>% data.matrix(), 
+                        crit="bic", alpha= my_alpha)
+  ridge <- glmnet(x = reg_data %>% na.omit() %>% select(-inflation.ahead), 
+                  y = reg_data %>% na.omit() %>% select(inflation.ahead) %>% data.matrix(), 
+                  alpha=my_alpha, lambda = ic_ridge$lambda)
+  
+  # Prediction
+  new = reg_data %>% select(-inflation.ahead) %>% tail(1)
+  result = predict(ridge, newx = data.matrix(new), s=ic_ridge$lambda)
+  
+  result
+}
+
+forecast1 = forecast1 %>% unlist() %>% 
+  ts(start = start(inflation)+c(0,rolling_window), frequency =  frequency(inflation) )
+toc()
+
+beepr::beep()
+```
+
+```{r, echo=F}
+inflation %>% window(start = c(1990,1)) %>%
+ts.plot(forecast1, col = c("red", "blue"),
+         gpars=list(ylab="Inflation", xlab=NULL, main = 'Ridge forecast', 
+                    sub = 'Using 4 lags of CPI and no lags of other variables'))
 legend("bottomleft", inset =0.05, legend=c("Inflation", "Forecast"), 
        col = c("red", "blue"), lty=1)
 ```
@@ -399,7 +466,6 @@ legend("bottomleft", inset =0.05, legend=c("Inflation", "Forecast"),
 # Save forecasts
 forecasts = cbind.zoo(forecasts, Ridge = forecast1) %>% as.ts()
 ```
-
 
 ### LASSO Regression
 
@@ -421,23 +487,26 @@ for(a in 1:(length(inflation)-rolling_window)){
   reg_data = bind_cols(inflation.ahead = lead(inflation[a:(a+rolling_window-1)]), reg_data) 
   
   # Ridge estimation
-  ic_ridge <- ic.glmnet(x = reg_data %>% na.omit() %>% select(-inflation.ahead), 
+  ic_lasso <- ic.glmnet(x = reg_data %>% na.omit() %>% select(-inflation.ahead), 
                         y = reg_data %>% na.omit() %>% select(inflation.ahead) %>% data.matrix(), 
                         crit="bic", alpha = my_alpha)
-  ridge <- glmnet(x = reg_data %>% na.omit() %>% select(-inflation.ahead), 
+  lasso <- glmnet(x = reg_data %>% na.omit() %>% select(-inflation.ahead), 
                   y = reg_data %>% na.omit() %>% select(inflation.ahead) %>% data.matrix(),
-                  alpha = my_alpha, lambda = ic_ridge$lambda)
+                  alpha = my_alpha, lambda = ic_lasso$lambda)
   
   # Prediction
   new = reg_data %>% select(-inflation.ahead) %>% tail(1)
-  forecast1[a] = predict(ridge, newx = data.matrix(new), s=ic_ridge$lambda)
+  forecast1[a] = predict(lasso, newx = data.matrix(new), s=ic_lasso$lambda)
 }
 
 forecast1 = forecast1 %>% unlist() %>% 
   ts(start = start(inflation)+c(0,rolling_window), frequency =  frequency(inflation) )
 ```
 
-```{r forecast_loop_LASSO_test, eval=FALSE}
+```{r forecast_loop_LASSO_other, eval = F, include=FALSE}
+# Alternative specifications of LASSO (with more inflation lags, etc)
+# Not as good, so did not include in the final file
+
 # Rolling window forecasting
 rolling_window <- 492
 
@@ -451,19 +520,18 @@ for(a in 1:(length(inflation)-rolling_window)){
   train = data[a:(a+rolling_window-1), ] %>% select(-CPIAUCSL)
   train_cpi = data[a:(a+rolling_window-1), ] %>% select(CPIAUCSL)
   # embed
-  reg_data = my_embed(train, n_lags = 1) 
-  cpi_lags = my_embed(train_cpi, n_lags = 24)
+  reg_data = my_embed(train, n_lags = 3) 
+  cpi_lags = my_embed(train_cpi, n_lags = 12)
   # bind the embeded columns with the one-step-ahead inflation
   reg_data = bind_cols(inflation.ahead = lead(inflation[a:(a+rolling_window-1)]), 
-                       cpi_lags, reg_data) %>%
-    na.omit()
+                       cpi_lags, reg_data)
   
   # LASSO estimation
-  ic_lasso <- ic.glmnet(x = reg_data %>% select(-inflation.ahead), 
-                        y = reg_data$inflation.ahead, 
+  ic_lasso <- ic.glmnet(x = reg_data %>% na.omit() %>% select(-inflation.ahead), 
+                        y = reg_data %>% na.omit() %>% select(inflation.ahead) %>% data.matrix(), 
                         crit="bic", alpha = my_alpha)
-  lasso <- glmnet(x = reg_data %>% select(-inflation.ahead), 
-                  y = reg_data$inflation.ahead,
+  lasso <- glmnet(x = reg_data %>% na.omit() %>% select(-inflation.ahead), 
+                  y = reg_data %>% na.omit() %>% select(inflation.ahead) %>% data.matrix(), 
                   alpha = my_alpha, lambda = ic_lasso$lambda)
   
   # Prediction
@@ -474,7 +542,6 @@ for(a in 1:(length(inflation)-rolling_window)){
 forecast1 = forecast1 %>% unlist() %>% 
   ts(start = start(inflation)+c(0,rolling_window), frequency =  frequency(inflation) )
 ```
-
 
 ```{r, echo=F}
 inflation %>% window(start = c(1990,1)) %>%
@@ -496,7 +563,7 @@ forecasts = cbind.zoo(forecasts, LASSO = forecast1) %>% as.ts()
 error = inflation - forecasts
 cum_error = sapply(error, function(x){x^2 %>% cumsum()}) %>%
   bind_cols(date = as.Date.yearmon(time(error))) %>%
-  setNames( c('AR', 'AR_PC', 'Ridge', 'LASSO', 'date' ) )
+  setNames( c('AR', 'AR+PC', 'Ridge (4 lags)', 'Ridge', 'LASSO', 'date' ) )
 ```
 
 ```{r, echo = F}
