@@ -477,6 +477,8 @@ rolling_window <- 492
 my_alpha = 1 # LASSO
 
 forecast1 = list()
+coefficients_lasso = list()
+
 
 for(a in 1:(length(inflation)-rolling_window)){
   # get the window for training the model
@@ -497,10 +499,15 @@ for(a in 1:(length(inflation)-rolling_window)){
   # Prediction
   new = reg_data %>% select(-inflation.ahead) %>% tail(1)
   forecast1[a] = predict(lasso, newx = data.matrix(new), s=ic_lasso$lambda)
+  
+  #Coefficients
+  coefficients_lasso[a] = coef(lasso)
+  
 }
 
 forecast1 = forecast1 %>% unlist() %>% 
   ts(start = start(inflation)+c(0,rolling_window), frequency =  frequency(inflation) )
+
 ```
 
 ```{r forecast_loop_LASSO_other, eval = F, include=FALSE}
@@ -537,6 +544,7 @@ for(a in 1:(length(inflation)-rolling_window)){
   # Prediction
   new = reg_data %>% select(-inflation.ahead) %>% tail(1)
   forecast1[a] = predict(lasso, newx = data.matrix(new), s=ic_lasso$lambda)
+
 }
 
 forecast1 = forecast1 %>% unlist() %>% 
@@ -588,9 +596,42 @@ write.csv( cum_error, file = "output/cum_error.csv" )
 ```
 
 
+## Item B
+
+We will follow the FRED-MD classification of variables into 8 groups: (i) output and income; (ii) labor market; (iii) housing; (iv) consumption,
+orders and inventories; (v) money and credit; (vi) interest and exchange rates; (vii) prices; and (viii) stock market. We are adding a ninth group called
+(ix) lags , with the lagged inflation series.
+
+
+```{r}
+# Computing variable importance for LASSO
+
+# Create a matrix to store coefficients
+coeff_lasso <- data.frame(matrix(ncol = ncol(reg_data), nrow = 261))
+colnames(coeff_lasso) <- colnames(reg_data)
+coeff_lasso <- coeff_lasso %>% select(-inflation.ahead) 
+
+#Retrieve coefficients and variable identifiers from lists
+var_lasso = modify_depth(coefficients_lasso, 1, "i")
+co_lasso = modify_depth(coefficients_lasso, 1, "x")
+
+for (bb in 1:261){
+  a = var_lasso[[bb]] %>% unlist()
+  b = co_lasso[[bb]] %>% unlist()
+    for (c in 2:length(a)){
+      coeff_lasso[bb,a[c]]<-b[c]
+    }
+}
+
+reg_data2 <- reg_data %>% select(-inflation.ahead) 
+
+#Multiply for sd
+for (bb in 1:261){
+  coeff_lasso[,bb] = coeff_lasso[,bb]*sd(reg_data2[,bb])
+}
 
 
 
-
+```
 
 
