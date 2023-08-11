@@ -56,21 +56,83 @@ After this process, we can use the usual IID bootstrap, since we are interested 
 
 ```{r}
 # Embedding
-n_lags = 4 # number of lags to be embeded
-my_embed = function(df){
+# function that creates n_lags of all variables of a given data frame
+my_embed = function(df, n_lags = 4){
 Lags = list()
-Lags[[1]] = df %>% select(-date)
-for(i in 1:n_lags){
-  Lags[[i+1]] = df %>% select(-date) %>% 
-    mutate_all(function(x) lag(x, n = i))
+Lags[[1]] = df %>% select(-contains('date'))
+if(n_lags>=1){
+  for(i in 1:n_lags){
+    Lags[[i+1]] = df %>% select(-contains('date')) %>% 
+      mutate_all(function(x) lag(x, n = i))
+  }
 }
-RF_data = reduce(Lags, function(x,y){bind_cols(x,y, .name_repair = ~make.unique(.x))}) 
+lagged_data = reduce(Lags, function(x,y){bind_cols(x,y, .name_repair = ~make.unique(.x))}) 
 
-return(RF_data)
+return(lagged_data)
 }
 ```
 
 ```{r forecast_loop}
+n_lags = 4
+
+# Rolling window forecasting
+rolling_window <- 492
+
+# Random Forest parameters
+p = (1+n_lags)*ncol(data) # number of variables
+mtry = ((1/3)*p) %>% round() # number of variables randomly selected
+num.trees = 500 # number of trees
+min.bucket = 5 # minimal number of observations in each leave (terminal node)
+
+
+set.seed(1430)
+
+forecast1 = list()
+
+for(a in 1:(length(inflation)-rolling_window)){
+  # get the window for training the model
+  train = data[a:(a+rolling_window-1), ]
+  # embed
+  RF_data = my_embed(train, n_lags = n_lags)
+  # bind the embeded columns with the one-step-ahead inflation
+  RF_data = bind_cols(inflation.ahead = lead(inflation[a:(a+rolling_window-1)]), RF_data) 
+  
+  # Random forest estimation
+  RF = ranger(inflation.ahead ~.,
+              data = RF_data %>% na.omit(),
+              oob.error = T,
+              # Parameters below are set previously
+              mtry = mtry, 
+              num.trees = num.trees,
+              min.bucket = min.bucket)
+  
+  # Prediction
+  new = RF_data %>% select(-inflation.ahead) %>% tail(1)
+  forecast1[a] = predict(RF, data = new)
+}
+
+forecast1 = forecast1 %>% unlist() %>% 
+  ts(start = start(inflation)+c(0,rolling_window), frequency =  frequency(inflation) )
+```
+
+```{r, echo=F}
+inflation %>% window(start = c(1990,1)) %>%
+ts.plot(forecast1, col = c("red", "blue"),
+         gpars=list(ylab="Inflation", xlab=NULL, main = 'RF forecast',
+                    sub = 'Using 4 lags of all variables'))
+legend("bottomleft", inset =0.05, legend=c("Inflation", "Forecast"), 
+       col = c("red", "blue"),  lty=1)
+```
+
+```{r, include=FALSE}
+# Save forecast
+forecasts = cbind(forecasts_Q2, RF_4lags = forecast1) %>% as.ts()
+```
+
+
+```{r forecast_loop2}
+n_lags = 0
+
 # Rolling window forecasting
 rolling_window <- 492
 
@@ -93,6 +155,17 @@ for(a in 1:(length(inflation)-rolling_window)){
   # bind the embeded columns with the one-step-ahead inflation
   RF_data = bind_cols(inflation.ahead = lead(inflation[a:(a+rolling_window-1)]), RF_data) 
   
+  
+  # get the window for training the model
+  train = data[a:(a+rolling_window-1), ] %>% select(-CPIAUCSL)
+  train_cpi = data[a:(a+rolling_window-1), ] %>% select(CPIAUCSL)
+  # embed
+  RF_data = my_embed(train, n_lags = n_lags) 
+  cpi_lags = my_embed(train_cpi, n_lags = 4)
+  # bind the embeded columns with the one-step-ahead inflation
+  RF_data = bind_cols(inflation.ahead = lead(inflation[a:(a+rolling_window-1)]), 
+                       cpi_lags, RF_data)
+  
   # Random forest estimation
   RF = ranger(inflation.ahead ~.,
               data = RF_data %>% na.omit(),
@@ -111,24 +184,19 @@ forecast1 = forecast1 %>% unlist() %>%
   ts(start = start(inflation)+c(0,rolling_window), frequency =  frequency(inflation) )
 ```
 
-```{r}
-#print(RF)
-#beepr::beep(8)
-```
-
 ```{r, echo=F}
 inflation %>% window(start = c(1990,1)) %>%
 ts.plot(forecast1, col = c("red", "blue"),
-         gpars=list(ylab="Inflation", xlab=NULL, main = 'AR+PC forecast'))
+         gpars=list(ylab="Inflation", xlab=NULL, main = 'Ridge forecast', 
+                    sub = 'Using 4 lags of CPI and no lags of other variables'))
 legend("bottomleft", inset =0.05, legend=c("Inflation", "Forecast"), 
-       col = c("red", "blue"),  lty=1)
+       col = c("red", "blue"), lty=1)
 ```
 
 ```{r, include=FALSE}
 # Save forecast
-forecasts = cbind(forecasts_Q2, RF = forecast1) %>% as.ts()
+forecasts = cbind(forecasts, RF = forecast1) %>% as.ts()
 ```
-
 
 ## Item E
 
@@ -138,7 +206,7 @@ error = inflation - forecasts
 cum_error = error %>% data.frame() %>%
   mutate_all(function(x){(x^2) %>% cumsum()}) %>%
   bind_cols(date = zoo::as.Date.yearmon(time(error))) %>%
-  setNames( c('AR', 'AR_PC', 'RF', 'date' ) )
+  setNames( c('AR', 'AR+PC', 'Ridge (4 lags)', 'Ridge', 'LASSO', 'RF (4 lags)', 'RF', 'date' ) )
 ```
 
 ```{r, echo = F}
@@ -150,6 +218,12 @@ cum_error %>%
   geom_vline(xintercept = as.Date('2020-01-01'), linetype = 'dashed', size = 1)+
   scale_color_lancet()+
   labs(title = 'Cumulative squared errors', color = 'Model', y = NULL, x = NULL)
+```
+
+```{r}
+# Save
+write.csv( forecasts, file = "output/forecasts.csv" )
+write.csv( cum_error, file = "output/cum_error.csv" )
 ```
 
 
