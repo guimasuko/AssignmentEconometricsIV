@@ -21,6 +21,7 @@ library(kableExtra)
 library(gridExtra)
 library(ggsci) # color pallette
 library(tictoc)
+library(readxl)
 ```
 
 ```{r}
@@ -271,6 +272,7 @@ rolling_window <- 492
 p.max <- 24
 
 forecast1 = list()
+coefficients_pc1 <- list()
 
 # set up parallel computation
 registerDoFuture()
@@ -297,13 +299,39 @@ AR_PC = dynlm(inflation ~ L(inflation, 1:p.opt) + L(train[,-1] , 1),
               data = train)     # run the AR-PC model with the optimal p
 
 new = create_datamatrix(train, p.opt)
-  
+
 result = AR_PC$coefficients %*% c(1, new) # one-step-ahead forecast
 result
 }
 
 forecast1 = forecast1 %>% unlist() %>% 
   ts(start = start(inflation)+c(0,rolling_window), frequency =  frequency(inflation) )
+
+
+# Loop to get coefficients
+coefficients_pc1 = foreach(a = 0:(length(inflation)-rolling_window-1)) %dorng% { 
+
+train = window(variables, 
+               start = start(inflation)+c(0,a), 
+               end = start(inflation)+c(0,a+rolling_window-1) )
+
+bic.table = rep(NA,p.max)
+
+for(p in 1:p.max){ # calculating the BIC for different orders of the AR(p)
+  AR_PC = dynlm(inflation ~ L(inflation, 1:p) + L(train[ ,-1] , 1), 
+              data = train)
+  bic.table[p] = BIC(AR_PC)
+}
+
+p.opt = which.min(bic.table) # pick the optimal p
+
+AR_PC = dynlm(inflation ~ L(inflation, 1:p.opt) + L(train[,-1] , 1), 
+              data = train)     # run the AR-PC model with the optimal p
+
+result = AR_PC[[1]] # one-step-ahead forecast
+result
+}
+
 ```
 
 ```{r, echo=F}
@@ -598,40 +626,226 @@ write.csv( cum_error, file = "output/cum_error.csv" )
 
 ## Item B
 
-We will follow the FRED-MD classification of variables into 8 groups: (i) output and income; (ii) labor market; (iii) housing; (iv) consumption,
-orders and inventories; (v) money and credit; (vi) interest and exchange rates; (vii) prices; and (viii) stock market. We are adding a ninth group called
-(ix) lags , with the lagged inflation series.
+We will follow the FRED-MD classification of variables into 8 groups: (i) output and income; (ii) labor market; (iii) housing; (iv) consumption,orders and inventories; (v) money and credit; (vi) interest and exchange rates; (vii) prices; and (viii) stock market. We are adding a ninth group called (ix) lags, with the lagged inflation series.
 
+
+```{r}
+#Get FRED groups
+groups = read_xlsx('data/FRED-MD_updated_appendix.xlsx')
+groups <- groups %>% select(fred, group) 
+
+#Change some names manually because they have minor differences with the variable names in existing dataframe
+groups$fred[groups$fred == "S&P 500"] <- "SP500"
+groups$fred[groups$fred == "IPB51222s"] <- "IPB51222S"
+groups$fred[groups$fred == "S&P: indust"] <- "SPINDUST"
+	
+names <- function(base_name, n) {
+    new_name = paste0(base_name, ".", n)
+    return(new_name)
+}
+
+# Expand group_df with new variable names
+expandgroup <- groups %>%
+  rowwise() %>%
+  mutate(
+    NewVariables = list(names(fred, 1:4)),
+    NewGroups = list(rep(group, length(NewVariables)))
+  ) %>%
+  unnest(c(NewVariables, NewGroups)) %>%
+  select(c(NewVariables, NewGroups)) %>%
+  rename(fred = "NewVariables", group = "NewGroups")
+
+# Merge with original group_df
+endgroups <- bind_rows(groups, expandgroup)
+
+# Sort by variable name
+endgroups <- endgroups %>%
+  arrange(fred)
+
+#Change CPI lags to group "lags" (9)
+endgroups$group[endgroups$fred == "CPIAUCSL"] <- 9
+endgroups$group[endgroups$fred == "CPIAUCSL.1"] <- 9  
+endgroups$group[endgroups$fred == "CPIAUCSL.2"] <- 9
+endgroups$group[endgroups$fred == "CPIAUCSL.3"] <- 9
+endgroups$group[endgroups$fred == "CPIAUCSL.4"] <- 9
+
+groups<-endgroups
+
+rm(endgroups, expandgroup, names)
+```
 
 ```{r}
 # Computing variable importance for LASSO
 
 # Create a matrix to store coefficients
-coeff_lasso <- data.frame(matrix(ncol = ncol(reg_data), nrow = 261))
-colnames(coeff_lasso) <- colnames(reg_data)
-coeff_lasso <- coeff_lasso %>% select(-inflation.ahead) 
+reg_data2 <- reg_data %>% select(-inflation.ahead) 
+coeff_lasso <- data.frame(matrix(ncol = ncol(reg_data2), nrow = length(forecast1)))
+colnames(coeff_lasso) <- colnames(reg_data2)
 
 #Retrieve coefficients and variable identifiers from lists
 var_lasso = modify_depth(coefficients_lasso, 1, "i")
 co_lasso = modify_depth(coefficients_lasso, 1, "x")
 
-for (bb in 1:261){
-  a = var_lasso[[bb]] %>% unlist()
-  b = co_lasso[[bb]] %>% unlist()
+for (i in 1:length(forecast1)){
+  a = var_lasso[[i]] %>% unlist()
+  b = co_lasso[[i]] %>% unlist()
     for (c in 2:length(a)){
-      coeff_lasso[bb,a[c]]<-b[c]
+      coeff_lasso[i,a[c]]<-b[c]
     }
 }
 
-reg_data2 <- reg_data %>% select(-inflation.ahead) 
+rm(var_lasso, co_lasso)
 
 #Multiply for sd
-for (bb in 1:261){
-  coeff_lasso[,bb] = coeff_lasso[,bb]*sd(reg_data2[,bb])
+for (i in 1:length(forecast1)){
+  coeff_lasso[,i] = coeff_lasso[,i]*sd(reg_data2[,i])
 }
+
+```
+
+We compute the 10 most relevant predictors considering the mean absolute value of the coefficients over all estimation windows.
+
+```{r}
+
+coeff_lasso <- coeff_lasso %>% mutate_all(~ replace_na(., 0))
+
+top10_lasso <-  colMeans(abs(coeff_lasso))
+
+top_10_lasso <- coeff_lasso %>%
+  summarise_all(~ mean(abs(.))) %>%
+  pivot_longer(everything()) %>%
+  arrange(desc(value)) %>%
+  head(10)
+
+top_10_lasso <- top_10_lasso %>% mutate(importance = 100* value/value[1]) %>% arrange(desc(importance))
+
+ggplot(top_10_lasso, aes(x = reorder(name, -importance), y = importance)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Variable Importance - LASSO",
+       x = "Variables",
+       y = "Importance") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+We now present results for groups. Group 9 (previous inflation) is consisntetly the most important though less important throught the sample. Groups 6 (bond and exchange rates) and 7 (prices) are important.   Group (2) labor market used to be relevant. Now not so much.
+
+```{r}
+#Get sum over groups
+# Sum over cells based on groups
+coeff_long <- data.frame(variable = rep(colnames(coeff_lasso), each = nrow(coeff_lasso)),
+                            row_index = rep(1:nrow(coeff_lasso), times = ncol(coeff_lasso)),
+                            value = as.vector(as.matrix(coeff_lasso)))
+
+coeff_long <- coeff_long %>% arrange(row_index)
+groups <- groups %>% rename(variable="fred")
+merged_data <- merge(transposed_df, groups, by = "variable", all.x = TRUE)
+merged_data <- merged_data %>% arrange(row_index)
+
+groupfinal_lasso <- merged_data %>% group_by(row_index, group) %>% summarise(total = sum(abs(value)))
+
+wide_group_lasso <- groupfinal_lasso %>%
+  pivot_wider(names_from = group, values_from = total) %>% ungroup()
+
+wide_group_lasso_rel <- wide_group_lasso %>%
+  mutate(across(-1, ~ . / rowSums(across(-1))))
+
+wide_group_lasso_rel$dates <- as.Date(time(forecast1))
+
+# Melt the dataframe to long format for plotting
+melted_df <- melt(wide_group_lasso_rel, id.vars = "dates", variable.name = "Column")
+melted_df <- melted_df %>% filter(Column != "row_index")
+melted_df$Group <- as.integer(melted_df$Column) -1
+melted_df$Group <- as.character(melted_df$Group)
+
+
+# Create a stacked column plot
+ggplot(data = melted_df, 
+       aes(x = dates, y = value, fill = Group)) + 
+  geom_area()
+
+```
+
+```{r}
+# Computing variable importance for PC
+
+# Get the alphas
+alpha = as.matrix(pca$rotation[,1:n_pc])
+
+#Get the lambdas (coefficients of the Factors) and the phis
+lambdas = matrix(NA,261,6)
+phis = matrix(NA,261,24)
+
+for(i in 1:261 ){
+  size = length(coefficients_pc1[[i]])
+  lags = size - 1 - 6 # intercept and 6 factors
+    for(j in 1:6){
+      lambdas[i,j] <- coefficients_pc1[[i]][size-6+j]
+      }
+    for(l in 1:24){
+      phis[i,l] <- coefficients_pc1[[i]][l+1]
+      }
+}
+  
+#Multiply alpha by lambdas to get "coefficient" of each variable in each window 
+importpc = as.data.frame(alpha %*% t(lambdas))
+phist = as.data.frame(t(phis))
+row_names <- paste("CPIAUCSL", seq(1, 24), sep = ".")
+importpc$fred = rownames(importpc)
+phist$fred = row_names
+importpc <- rbind(importpc, phist)
+
+importpc = merge(importpc, groups, by="fred",  all.x = TRUE)
+importpc$group <- ifelse(is.na(importpc$group), 9, importpc$group) # giving all lags of inflation group 9
+
+```
+
+Top 10 most relevant variables
+```{r}
+top_10_pc <- importpc %>%
+  rowwise() %>%
+  mutate(mean_abs = mean(abs(c_across(-c(fred, group))))) %>%
+  ungroup() %>%
+  select(fred, mean_abs) %>%
+  arrange(desc(mean_abs)) %>%
+  head(10)
+
+top_10_pc <- top_10_pc %>% mutate(importance = 100* mean_abs/mean_abs[1]) %>% arrange(desc(importance))
+
+ggplot(top_10_pc, aes(x = reorder(fred, -importance), y = importance)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Variable Importance - PC",
+       x = "Variables",
+       y = "Importance") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+Same shit 9, 7, 6, 2
+
+
+```{r}
+result <- importpc %>%
+  mutate(across(starts_with("V"), ~ abs(.), .names = "abs_{.col}")) %>%
+  group_by(group) %>%
+  summarise(across(starts_with("abs_V"), ~ sum(., na.rm = TRUE)))
+
+pc_rel <- result %>%
+  mutate(across(starts_with("abs_V"), ~ . / sum(., na.rm = TRUE), .names = "rel_{.col}")) %>%
+  select(starts_with("rel_"))
+  
+pc_rel_transposed <- as.data.frame((t(pc_rel)))
+
+pc_rel_transposed <- pc_rel_transposed %>%
+  mutate(date = as.Date(time(forecast1)))
+
+importpc_long <- pc_rel_transposed %>%
+  pivot_longer(cols = starts_with("V"), names_to = "variable", values_to = "value")
+
+ggplot(importpc_long, aes(x = date, y = value, fill = variable)) +
+  geom_area() +
+  labs(titel = "Group Importance", x = "Date", y = "Value", fill = "Variable") 
 
 
 
 ```
+
 
 
