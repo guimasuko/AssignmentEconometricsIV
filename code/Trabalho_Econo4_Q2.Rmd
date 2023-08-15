@@ -22,6 +22,7 @@ library(gridExtra)
 library(ggsci) # color pallette
 library(tictoc)
 library(readxl)
+library(reshape2)
 ```
 
 ```{r}
@@ -53,7 +54,9 @@ First of all, we must do some data wrangling.
 
 ```{r}
 # Import the data
-raw_data = read_csv('data/2021-12.csv')
+#raw_data = read_csv('data/2021-12.csv')
+raw_data = read_csv('C:/Users/Caio Garzeri/OneDrive - puc-rio.br/Econometria IV/AssignmentEconometricsIV/data/2021-12.csv')
+
 data0 = raw_data[-1,] %>% select_if(~ !any(is.na(.)))
 transformation = raw_data[1,]
 ```
@@ -122,11 +125,11 @@ We believe that a maximum lag of 24 is more than reasonable. Then, the determine
 BIC.ar <- function(model) {
   
   ssr <- sum(model$resid^2, na.rm = T)
-  t <- length(model$resid)
-  npar <- length(model$coef)
+  t <- sum(!is.na(model$resid))
+  npar <- length(model$ar) + 1
   
   return(c("p" = model$order,
-            "BIC" = log(ssr/t) + npar * log(t)/t))
+           "BIC" = log(ssr/t) + npar * log(t)/t))
 }
 ```
 
@@ -138,10 +141,11 @@ rolling_window <- 492
 p.max <- 24
 
 forecast1 = list()
+popt_AR = data.frame(popt = numeric(261))
 
 for(a in 0:(length(inflation)-rolling_window-1)){
 
-  # get the window for training the model
+# get the window for training the model
 train = window(inflation, 
                start = start(inflation)+c(0,a), 
                end = start(inflation)+c(0,a+rolling_window-1) )
@@ -156,6 +160,8 @@ for(p in 0:p.max){ # calculating the BIC for different orders of the AR(p)
 bic.table = data.frame(bic.table)
 
 p.opt = bic.table$p[which.min(bic.table$BIC)] # pick the optimal p
+
+popt_AR$popt[a+1] <-p.opt
 
 AR =  ar(train, order.max = p.opt, method = 'ols', aic = F) # run the AR model with the optimal p
 
@@ -372,7 +378,7 @@ return(lagged_data)
 ```
 
 
-```{r forecast_loop_Ridge}
+```{r forecast_loop_Ridge,eval = F, include=FALSE}
 tic()
 # Rolling window forecasting
 rolling_window <- 492
@@ -432,7 +438,8 @@ forecasts = cbind.zoo(forecasts, Ridge_4lags = forecast1) %>% as.ts()
 
 The forecast of the Ridge regression with 4 lags has a notably bad fit to the actual inflation series. We noticed that, since the ridge is not able to give a sparse solution, when there are too many variables, the estimated model becomes basically an intercept and almost all the other coefficients are very close to zero (but not zero). Hence, we tested other (more parsimonious) specifications. When we include the all the macroeconomics variables - without any lags - and lags of the CPI, we get a more reasonable result. The results are very robust to the number of CPI lags, so we keep 4 lags, as initially intended. 
 
-```{r forecast_loop_Ridge_other}
+
+```{r forecast_loop_Ridge_other_with coeff}
 tic()
 # Rolling window forecasting
 rolling_window <- 492
@@ -448,7 +455,7 @@ plan("multisession", workers = 3) # use 3 cores
 
 last_fcst = (length(inflation)-rolling_window)
 
-forecast1 = foreach(a = 1:last_fcst) %dorng% { 
+output = foreach(a = 1:last_fcst) %dorng% { 
   # get the window for training the model
   train = data[a:(a+rolling_window-1), ] %>% select(-CPIAUCSL)
   train_cpi = data[a:(a+rolling_window-1), ] %>% select(CPIAUCSL)
@@ -469,16 +476,26 @@ forecast1 = foreach(a = 1:last_fcst) %dorng% {
   
   # Prediction
   new = reg_data %>% select(-inflation.ahead) %>% tail(1)
-  result = predict(ridge, newx = data.matrix(new), s=ic_ridge$lambda)
+  result1 = predict(ridge, newx = data.matrix(new), s=ic_ridge$lambda)
   
+  # Coeficients
+  result2 = coef(ridge, s=ic_ridge$lambda)
+  
+  result = list(forecast1 = result1, coef = result2)
   result
 }
 
-forecast1 = forecast1 %>% unlist() %>% 
-  ts(start = start(inflation)+c(0,rolling_window), frequency =  frequency(inflation) )
+output = output %>% transpose()
+
+forecast1 = output$forecast1 %>% unlist() %>%
+ ts(start = start(inflation)+c(0,rolling_window), frequency =  frequency(inflation) )
+
+ridge_coeficients = output$coef %>% reduce(cbind) %>% as.matrix()
+
 toc()
 
 beepr::beep()
+
 ```
 
 ```{r, echo=F}
@@ -498,6 +515,7 @@ forecasts = cbind.zoo(forecasts, Ridge = forecast1) %>% as.ts()
 ### LASSO Regression
 
 ```{r forecast_loop_LASSO}
+tic()
 # Rolling window forecasting
 rolling_window <- 492
 
@@ -535,6 +553,11 @@ for(a in 1:(length(inflation)-rolling_window)){
 
 forecast1 = forecast1 %>% unlist() %>% 
   ts(start = start(inflation)+c(0,rolling_window), frequency =  frequency(inflation) )
+
+toc()
+
+beepr::beep()
+
 
 ```
 
@@ -598,8 +621,14 @@ forecasts = cbind.zoo(forecasts, LASSO = forecast1) %>% as.ts()
 # Forecasting error
 error = inflation - forecasts
 cum_error = sapply(error, function(x){x^2 %>% cumsum()}) %>%
-  bind_cols(date = as.Date.yearmon(time(error))) %>%
-  setNames( c('AR', 'AR+PC', 'Ridge (4 lags)', 'Ridge', 'LASSO', 'date' ) )
+ bind_cols(date = as.Date.yearmon(time(error))) %>%
+ setNames( c('AR', 'AR+PC', 'Ridge (4 lags)', 'Ridge', 'LASSO', 'date' ) )
+
+
+# cum_error = sapply(error, function(x){x^2 %>% cumsum()}) %>%
+#   bind_cols(date = as.Date.yearmon(time(error))) %>%
+#   setNames( c('AR', 'AR+PC', 'Ridge', 'LASSO', 'date' ) )
+
 ```
 
 ```{r, echo = F}
@@ -614,13 +643,12 @@ cum_error %>%
 ```
 
 
-
-
-```{r}
+```{r, eval = F, include=FALSE}
 # Save data for Question 3
 save(data, inflation, forecasts, file = 'data/Q2_objects.Rda')
 write.csv( forecasts, file = "output/forecasts.csv" )
 write.csv( cum_error, file = "output/cum_error.csv" )
+
 ```
 
 
@@ -631,8 +659,10 @@ We will follow the FRED-MD classification of variables into 8 groups: (i) output
 
 ```{r}
 #Get FRED groups
-groups = read_xlsx('data/FRED-MD_updated_appendix.xlsx')
+groups = read_xlsx('C:\\Users\\Caio Garzeri\\OneDrive - puc-rio.br\\Econometria IV\\AssignmentEconometricsIV\\data\\FRED-MD_updated_appendix.xlsx')
+#groups = read_xlsx('data/FRED-MD_updated_appendix.xlsx')
 groups <- groups %>% select(fred, group) 
+
 
 #Change some names manually because they have minor differences with the variable names in existing dataframe
 groups$fred[groups$fred == "S&P 500"] <- "SP500"
@@ -674,11 +704,98 @@ groups<-endgroups
 rm(endgroups, expandgroup, names)
 ```
 
+We compute variable importance for Ridge and pick the top 10 most important overtime.
+
+
+```{r}
+# Computing variable importance for RIDGE
+
+ridge_coeff <- as.data.frame(ridge_coeficients)
+colnames(ridge_coeff) <- NULL
+ridge_coeff <- ridge_coeff[2:109,]  
+
+ridge_names <- ridge_coeff %>% row.names(.)
+names <- as.data.frame(ridge_names)
+ridge_coeff <- cbind(names, ridge_coeff)
+reg_data2 <- reg_data %>% select(-inflation.ahead) 
+std_deviations <- apply(reg_data2, 2, sd)
+std_dev_df <- data.frame(Column_Names = colnames(reg_data2), Standard_Deviation = std_deviations)
+std_dev_df <- std_dev_df %>% rename(ridge_names = "Column_Names")
+
+ridge_coeff <- merge(ridge_coeff,std_dev_df, by = "ridge_names", all.x = TRUE )
+
+ridge_coeff$Standard_Deviation[ridge_coeff$ridge_names == "CPIAUCSL.1"]<- ridge_coeff$Standard_Deviation[ridge_coeff$ridge_names == "CPIAUCSL"]
+ridge_coeff$Standard_Deviation[ridge_coeff$ridge_names == "CPIAUCSL.2"]<- ridge_coeff$Standard_Deviation[ridge_coeff$ridge_names == "CPIAUCSL"]
+ridge_coeff$Standard_Deviation[ridge_coeff$ridge_names == "CPIAUCSL.3"]<- ridge_coeff$Standard_Deviation[ridge_coeff$ridge_names == "CPIAUCSL"]
+ridge_coeff$Standard_Deviation[ridge_coeff$ridge_names == "CPIAUCSL.4"]<- ridge_coeff$Standard_Deviation[ridge_coeff$ridge_names == "CPIAUCSL"]
+
+ridge_coeff_std <- ridge_coeff
+
+for (col in 2:262) {
+  ridge_coeff_std[[col]] <- ridge_coeff_std[[col]] * ridge_coeff_std$Standard_Deviation
+}
+
+top10_ridge <- ridge_coeff_std %>%
+  mutate(Mean_Value = rowMeans(across(2:262, ~abs(.)))) %>%
+  select(ridge_names, Mean_Value) %>%
+  arrange(desc(Mean_Value)) %>%
+  head(10)
+
+top10_ridge <- top10_ridge %>% mutate(importance = 100* Mean_Value/Mean_Value[1]) %>% arrange(desc(importance))
+
+ggplot(top10_ridge, aes(x = reorder(ridge_names, -importance), y = importance)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Variable Importance - RIDGE",
+       x = "Variables",
+       y = "Importance") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+We now compute importance by group in Ridge. 
+
+```{r}
+#Get sum over groups
+# Sum over cells based on groups
+
+ridge_coeff_std <- ridge_coeff_std %>% rename(fred = "ridge_names")
+
+ridge_coeff_std <- merge(ridge_coeff_std,groups, by = "fred", all.x = TRUE )
+
+ridge_group <- ridge_coeff_std  
+
+for(i in 2:262){
+  for(j in 1:108){
+    ridge_group[j,i] <- abs(ridge_coeff_std[j,i])/sum(abs((ridge_coeff_std[,i])))
+  }
+}
+
+group_sums <- ridge_group %>%
+  group_by(group) %>%
+  summarize(across(2:262, ~sum(.)))
+
+colnames(group_sums)[2:262] <- as.Date(time(forecast1))
+
+group_sums_long <- pivot_longer(group_sums, cols = -group, names_to = "Time", values_to = "Value")
+group_sums_long$Time <- as.integer(group_sums_long$Time)
+group_sums_long$date <- as.Date(group_sums_long$Time)
+
+ggplot(group_sums_long, aes(x = date, y = Value, fill = factor(group))) +
+  geom_area() +
+  labs(title = "RIDGE - Group Importance over Time", x = "Time", y = "Relative Values") +
+  scale_fill_discrete(name = "Groups") +
+  theme_bw() + 
+  scale_fill_jco()
+
+```
+We repeat the exercise for LASSO. First selecting the top 10 most important variables.
+
 ```{r}
 # Computing variable importance for LASSO
 
 # Create a matrix to store coefficients
-reg_data2 <- reg_data %>% select(-inflation.ahead) 
+
 coeff_lasso <- data.frame(matrix(ncol = ncol(reg_data2), nrow = length(forecast1)))
 colnames(coeff_lasso) <- colnames(reg_data2)
 
@@ -727,7 +844,7 @@ ggplot(top_10_lasso, aes(x = reorder(name, -importance), y = importance)) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ```
-We now present results for groups. Group 9 (previous inflation) is consisntetly the most important though less important throught the sample. Groups 6 (bond and exchange rates) and 7 (prices) are important.   Group (2) labor market used to be relevant. Now not so much.
+We now present results for groups. Group 9 (previous inflation) is consistently the most important though less important throught the sample. Groups 6 (bond and exchange rates) and 7 (prices) are important.   Group (2) labor market used to be relevant. For the most recent windows, not so much.
 
 ```{r}
 #Get sum over groups
@@ -738,7 +855,7 @@ coeff_long <- data.frame(variable = rep(colnames(coeff_lasso), each = nrow(coeff
 
 coeff_long <- coeff_long %>% arrange(row_index)
 groups <- groups %>% rename(variable="fred")
-merged_data <- merge(transposed_df, groups, by = "variable", all.x = TRUE)
+merged_data <- merge(coeff_long, groups, by = "variable", all.x = TRUE)
 merged_data <- merged_data %>% arrange(row_index)
 
 groupfinal_lasso <- merged_data %>% group_by(row_index, group) %>% summarise(total = sum(abs(value)))
@@ -761,9 +878,14 @@ melted_df$Group <- as.character(melted_df$Group)
 # Create a stacked column plot
 ggplot(data = melted_df, 
        aes(x = dates, y = value, fill = Group)) + 
-  geom_area()
+  geom_area() +
+  labs(title = "LASSO - Group Importance over Time", x = "Time", y = "Relative Values") +
+  scale_fill_discrete(name = "Groups") +
+  theme_minimal() + 
+  scale_fill_jco()
 
 ```
+Finally, we do that for the AR+PC model, computing variable importance of the PC block of the model. This is slightly more complicated than LASSO and Ridge. We retrieve the alphas from the Factor on Variables and then multiply them be the coefficients in the model regression.
 
 ```{r}
 # Computing variable importance for PC
@@ -794,8 +916,21 @@ importpc$fred = rownames(importpc)
 phist$fred = row_names
 importpc <- rbind(importpc, phist)
 
+groups <- groups %>% rename(fred="variable")
 importpc = merge(importpc, groups, by="fred",  all.x = TRUE)
 importpc$group <- ifelse(is.na(importpc$group), 9, importpc$group) # giving all lags of inflation group 9
+
+
+# Get the number of lags - we use this in item A
+lags_PC_AR <- table(colSums(!is.na(phist)))
+
+lags_PC_AR <- data.frame(
+  lags = as.numeric(names(lags_PC_AR)),
+  count = as.numeric(lags_PC_AR)
+)
+
+lags_PC_AR = lags_PC_AR[1:13,]
+lags_PC_AR <- lags_PC_AR %>% arrange(desc(count))
 
 ```
 
@@ -818,7 +953,7 @@ ggplot(top_10_pc, aes(x = reorder(fred, -importance), y = importance)) +
        y = "Importance") +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
-Same shit 9, 7, 6, 2
+We again compute importance by group. Pattern is very close to that of LASSO: Groups 9, 7, 6, 2
 
 
 ```{r}
@@ -839,10 +974,15 @@ pc_rel_transposed <- pc_rel_transposed %>%
 importpc_long <- pc_rel_transposed %>%
   pivot_longer(cols = starts_with("V"), names_to = "variable", values_to = "value")
 
-ggplot(importpc_long, aes(x = date, y = value, fill = variable)) +
-  geom_area() +
-  labs(titel = "Group Importance", x = "Date", y = "Value", fill = "Variable") 
+importpc_long$Group <- as.character(gsub("\\D", "", importpc_long$variable))
 
+ggplot(importpc_long, aes(x = date, y = value, fill = Group)) +
+  geom_area() +
+  labs(title = "AR_PC - Group Importance over Time", x = "Time", y = "Relative Values") +
+  scale_fill_discrete(name = "Groups") +
+  theme_minimal()  + 
+  scale_fill_jco()
+ 
 
 
 ```
