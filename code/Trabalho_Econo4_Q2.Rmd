@@ -620,14 +620,14 @@ forecasts = cbind.zoo(forecasts, LASSO = forecast1) %>% as.ts()
 ```{r}
 # Forecasting error
 error = inflation - forecasts
+cum_error = sapply(error, function(x){x^2 %>% cumsum()}) %>%
+ bind_cols(date = as.Date.yearmon(time(error))) %>%
+ setNames( c('AR', 'AR+PC', 'Ridge (4 lags)', 'Ridge', 'LASSO', 'date' ) )
+
+
 # cum_error = sapply(error, function(x){x^2 %>% cumsum()}) %>%
 #   bind_cols(date = as.Date.yearmon(time(error))) %>%
-#   setNames( c('AR', 'AR+PC', 'Ridge (4 lags)', 'Ridge', 'LASSO', 'date' ) )
-
-
-cum_error = sapply(error, function(x){x^2 %>% cumsum()}) %>%
-  bind_cols(date = as.Date.yearmon(time(error))) %>%
-  setNames( c('AR', 'AR+PC', 'Ridge', 'LASSO', 'date' ) )
+#   setNames( c('AR', 'AR+PC', 'Ridge', 'LASSO', 'date' ) )
 
 ```
 
@@ -704,6 +704,9 @@ groups<-endgroups
 rm(endgroups, expandgroup, names)
 ```
 
+We compute variable importance for Ridge and pick the top 10 most important overtime.
+
+
 ```{r}
 # Computing variable importance for RIDGE
 
@@ -750,7 +753,7 @@ ggplot(top10_ridge, aes(x = reorder(ridge_names, -importance), y = importance)) 
 
 ```
 
-We now compute importance by group in RIDGE. 
+We now compute importance by group in Ridge. 
 
 ```{r}
 #Get sum over groups
@@ -786,7 +789,7 @@ ggplot(group_sums_long, aes(x = date, y = Value, fill = factor(group))) +
   scale_fill_jco()
 
 ```
-
+We repeat the exercise for LASSO. First selecting the top 10 most important variables.
 
 ```{r}
 # Computing variable importance for LASSO
@@ -841,7 +844,7 @@ ggplot(top_10_lasso, aes(x = reorder(name, -importance), y = importance)) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ```
-We now present results for groups. Group 9 (previous inflation) is consistently the most important though less important throught the sample. Groups 6 (bond and exchange rates) and 7 (prices) are important.   Group (2) labor market used to be relevant. Now not so much.
+We now present results for groups. Group 9 (previous inflation) is consistently the most important though less important throught the sample. Groups 6 (bond and exchange rates) and 7 (prices) are important.   Group (2) labor market used to be relevant. For the most recent windows, not so much.
 
 ```{r}
 #Get sum over groups
@@ -882,6 +885,7 @@ ggplot(data = melted_df,
   scale_fill_jco()
 
 ```
+Finally, we do that for the AR+PC model, computing variable importance of the PC block of the model. This is slightly more complicated than LASSO and Ridge. We retrieve the alphas from the Factor on Variables and then multiply them be the coefficients in the model regression.
 
 ```{r}
 # Computing variable importance for PC
@@ -949,7 +953,7 @@ ggplot(top_10_pc, aes(x = reorder(fred, -importance), y = importance)) +
        y = "Importance") +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
-Same pattern 9, 7, 6, 2
+We again compute importance by group. Pattern is very close to that of LASSO: Groups 9, 7, 6, 2
 
 
 ```{r}
