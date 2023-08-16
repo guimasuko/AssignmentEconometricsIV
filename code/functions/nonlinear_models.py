@@ -6,7 +6,6 @@ from keras.models import Sequential
 from keras.layers import LSTM, Dense, Dropout
 
 
-
 def NN_forecast(X_train: pd.DataFrame, y_train: pd.Series, X_test: pd.DataFrame, y_test: pd.Series) -> tuple:
     # model with 3 hidden layers and 100 neurons each with dropout
 
@@ -18,13 +17,13 @@ def NN_forecast(X_train: pd.DataFrame, y_train: pd.Series, X_test: pd.DataFrame,
     # adding first layer: units is the number of neurons, activation is the function, input_dim: number of features
     NN_model.add(Dense(units=100, activation='relu', input_dim=num_features))
     # adding a dropout in the first layer to the second layer
-    NN_model.add(Dropout(0.4))
+    NN_model.add(Dropout(0.2))
     # adding second layer: units is the number of neurons, activation is the function
-    NN_model.add(Dense(units=100, activation='relu'))
+    NN_model.add(Dense(units=60, activation='relu'))
     # adding a dropout in the second layer to the third layer
-    NN_model.add(Dropout(0.4))
+    NN_model.add(Dropout(0.2))
     # adding third layer: units is the number of neurons, activation is the function
-    NN_model.add(Dense(units=100, activation='relu'))
+    NN_model.add(Dense(units=30, activation='relu'))
     # adding last layer: output layer
     NN_model.add(Dense(units=1, activation='linear'))
 
@@ -58,15 +57,15 @@ def LSTM_forecast(X_train: pd.DataFrame, y_train: pd.Series, X_test: pd.DataFram
     # create a layer after other in a sequential way
     LSTM_model = Sequential()
     # adding first layer: unit is the number of neurons, activation is the function, input_dim: number of predictors
-    LSTM_model.add(LSTM(units=50, activation='tanh', recurrent_activation='sigmoid', return_sequences=True, input_shape=(1, num_features)))
+    LSTM_model.add(LSTM(units=100, activation='tanh', recurrent_activation='sigmoid', return_sequences=True, input_shape=(1, num_features)))
     # adding a dropout in the first layer to second layer
-    LSTM_model.add(Dropout(0.4))
+    LSTM_model.add(Dropout(0.2))
     # adding second layer: unit is the number of neurons, activation is the function, input_dim: number of predictors
-    LSTM_model.add(LSTM(units=50, activation='tanh', recurrent_activation='sigmoid', return_sequences=True))
-    # adding a dropout in the second layer to third layer
-    LSTM_model.add(Dropout(0.4))
-    # adding third layer: unit is the number of neurons, activation is the function, input_dim: number of predictors
-    LSTM_model.add(LSTM(units=50, activation='tanh', recurrent_activation='sigmoid'))
+    LSTM_model.add(LSTM(units=60, activation='tanh', recurrent_activation='sigmoid', return_sequences=True))
+    # adding a dropout in the first layer to second layer
+    LSTM_model.add(Dropout(0.2))
+    # adding fourth layer: unit is the number of neurons, activation is the function, input_dim: number of predictors
+    LSTM_model.add(LSTM(units=30, activation='tanh', recurrent_activation='sigmoid'))
     # adding last layer: output layer
     LSTM_model.add(Dense(units=1, activation='linear'))
 
