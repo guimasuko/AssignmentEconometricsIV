@@ -206,7 +206,7 @@ error = inflation - forecasts
 cum_error = error %>% data.frame() %>%
   mutate_all(function(x){(x^2) %>% cumsum()}) %>%
   bind_cols(date = zoo::as.Date.yearmon(time(error))) %>%
-  setNames( c('AR', 'AR+PC', 'Ridge (4 lags)', 'Ridge', 'LASSO', 'RF (4 lags)', 'RF', 'date' ) )
+  setNames( c('AR', 'AR+PC', 'Ridge', 'LASSO', 'RF (4 lags)', 'RF', 'date' ) )
 ```
 
 ```{r, echo = F}
@@ -222,12 +222,48 @@ cum_error %>%
 
 ```{r}
 # Save
-write.csv( forecasts, file = "output/forecasts.csv" )
-write.csv( cum_error, file = "output/cum_error.csv" )
+write.csv(forecasts, file = "output/forecasts.csv" )
+write.csv(cum_error, file = "output/cum_error.csv" )
 ```
 
+```{r}
+# Get errors from NN
+NN_MSE <- read.csv("output\\NN_MSE.csv")
+
+cum_error_total <- cbind (cum_error[1:260,], NN_MSE)
+
+cum_error_total <- cum_error_total %>% rename(NN = "Cumulated_MSE_NN") 
+cum_error_total <- cum_error_total %>% rename(LSTM = "Cumulated_MSE_LSTM")
+cum_error_total <- cum_error_total %>% select(-X)
 
 
+cum_error_total %>%
+  gather(key = model, value = error, -date) %>% 
+  ggplot(aes(x = date, y = error, color = model)) +
+  geom_line(size=1) +
+  geom_vline(xintercept = as.Date('2020-01-01'), linetype = 'dashed', size = 1)+
+  scale_color_lancet()+
+  labs(title = 'Cumulative squared errors', color = 'Model', y = NULL, x = NULL)
 
 
+```
+```{r}
+# Compute relative MSE
 
+AR = cum_error_total$AR[260]/cum_error_total$AR[260]
+ARPC = cum_error_total$'AR+PC'[260]/cum_error_total$AR[260]
+Ridge = cum_error_total$Ridge[260]/cum_error_total$AR[260]
+LASSO = cum_error_total$LASSO[260]/cum_error_total$AR[260]
+RF4lags = cum_error_total$'RF (4 lags)'[260]/cum_error_total$AR[260]
+RF = cum_error_total$RF[260]/cum_error_total$AR[260]
+NN = cum_error_total$NN[260]/cum_error_total$AR[260]
+LSTM = cum_error_total$LSTM[260]/cum_error_total$AR[260]
+
+```
+
+```{r}
+# Compute relative MSE
+
+write.csv(cum_error, file = "output\\cum_error_total.csv" )
+
+```
